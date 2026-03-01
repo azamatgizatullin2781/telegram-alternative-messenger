@@ -1,4 +1,6 @@
 {
+  "upload": "https://functions.poehali.dev/95527bd3-e3e8-457e-87f0-cb24e13c9701",
+  "bot": "https://functions.poehali.dev/a255e73f-60bc-44b3-a5be-5a9a447c63d8",
   "auth": "https://functions.poehali.dev/bfc5b9e0-c131-4de3-873d-5cea2cf23a74",
   "chats": "https://functions.poehali.dev/a314e04e-654c-456f-94d8-9fc4685a95c7",
   "messages": "https://functions.poehali.dev/fe8843ba-65b8-4ee1-b7ed-e30e552ffa92"

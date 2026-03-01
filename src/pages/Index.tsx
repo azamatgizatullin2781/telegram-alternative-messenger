@@ -5,6 +5,8 @@ import func2url from "../../backend/func2url.json";
 const AUTH_URL = func2url.auth;
 const CHATS_URL = func2url.chats;
 const MESSAGES_URL = func2url.messages;
+const BOT_URL = func2url.bot;
+const UPLOAD_URL = func2url.upload;
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface User {
@@ -14,6 +16,7 @@ interface User {
   avatar_color: string;
   avatar_initials: string;
   status: string;
+  avatar_url?: string;
 }
 
 interface ChatItem {
@@ -32,6 +35,24 @@ interface Message {
   status: string;
   time: string;
   out: boolean;
+  msg_type?: string;
+  media_url?: string;
+  media_name?: string;
+  media_size?: number;
+  media_duration?: number;
+  geo_lat?: number;
+  geo_lon?: number;
+  contact_name?: string;
+  contact_phone?: string;
+  reply_to_id?: number;
+}
+
+interface BotMessage {
+  id: number;
+  role: "bot" | "user";
+  text: string;
+  extra?: Record<string, unknown>;
+  time: string;
 }
 
 // ─── API helpers ────────────────────────────────────────────────────────────
@@ -47,6 +68,21 @@ async function apiFetch(url: string, opts: RequestInit = {}) {
   const res = await fetch(url, { ...opts, headers });
   const data = await res.json();
   return { ok: res.ok, status: res.status, data };
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
 }
 
 // ─── Auth Screen ────────────────────────────────────────────────────────────
@@ -139,15 +175,149 @@ function AuthScreen({ onAuth }: { onAuth: (user: User) => void }) {
 // ─── Avatar ─────────────────────────────────────────────────────────────────
 function Avatar({ user, size = 11, dot = true }: { user: User; size?: number; dot?: boolean }) {
   const sz = size === 9 ? "w-9 h-9 text-xs" : size === 10 ? "w-10 h-10 text-sm" : "w-11 h-11 text-sm";
+  const px = size === 9 ? 36 : size === 10 ? 40 : 44;
   return (
     <div className="relative shrink-0">
-      <div className={`${sz} rounded-full flex items-center justify-center text-white font-semibold`}
-        style={{ background: user.avatar_color }}>
-        {user.avatar_initials || user.display_name?.slice(0, 2).toUpperCase()}
-      </div>
+      {user.avatar_url ? (
+        <img src={user.avatar_url} alt={user.display_name}
+          className={`${sz} rounded-full object-cover`}
+          style={{ width: px, height: px }} />
+      ) : (
+        <div className={`${sz} rounded-full flex items-center justify-center text-white font-semibold`}
+          style={{ background: user.avatar_color }}>
+          {user.avatar_initials || user.display_name?.slice(0, 2).toUpperCase()}
+        </div>
+      )}
       {dot && user.status === "online" && (
         <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-400 border-2 border-white rounded-full" />
       )}
+    </div>
+  );
+}
+
+// ─── Stellar Badge ────────────────────────────────────────────────────────
+function StellarBadge({ size = "sm" }: { size?: "sm" | "lg" }) {
+  if (size === "lg") {
+    return (
+      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-white text-xs font-bold"
+        style={{ background: "linear-gradient(135deg, #6366f1, #a855f7, #ec4899)" }}>
+        ⭐ STELLAR
+      </div>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-white text-[10px] font-bold"
+      style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
+      ⭐
+    </span>
+  );
+}
+
+// ─── Message bubble renderers ─────────────────────────────────────────────
+function MessageBubble({ msg, allMessages }: { msg: Message; allMessages: Message[] }) {
+  const replyMsg = msg.reply_to_id ? allMessages.find(m => m.id === msg.reply_to_id) : null;
+
+  const inner = () => {
+    if (msg.msg_type === "image" && msg.media_url) {
+      return (
+        <div>
+          {replyMsg && <ReplyPreview msg={replyMsg} />}
+          <img src={msg.media_url} alt="фото" className="max-w-xs rounded-xl cursor-pointer"
+            onClick={() => window.open(msg.media_url, "_blank")} />
+          {msg.text && <p className="text-sm mt-1 leading-relaxed">{msg.text}</p>}
+        </div>
+      );
+    }
+    if (msg.msg_type === "video" && msg.media_url) {
+      return (
+        <div>
+          {replyMsg && <ReplyPreview msg={replyMsg} />}
+          <video src={msg.media_url} controls className="max-w-xs rounded-xl" />
+          {msg.text && <p className="text-sm mt-1">{msg.text}</p>}
+        </div>
+      );
+    }
+    if (msg.msg_type === "audio" && msg.media_url) {
+      return (
+        <div className="flex items-center gap-2 min-w-[200px]">
+          <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
+            <Icon name="Music" size={18} className="text-primary" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium truncate max-w-[150px]">{msg.media_name || "Аудио"}</p>
+            <audio src={msg.media_url} controls className="w-full h-7 mt-1" />
+          </div>
+        </div>
+      );
+    }
+    if (msg.msg_type === "document" && msg.media_url) {
+      return (
+        <a href={msg.media_url} target="_blank" rel="noreferrer"
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+            <Icon name="FileText" size={20} className="text-primary" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium truncate max-w-[180px]">{msg.media_name || "Документ"}</p>
+            <p className="text-xs opacity-70">{msg.media_size ? formatBytes(msg.media_size) : "Файл"}</p>
+          </div>
+          <Icon name="Download" size={16} className="ml-auto shrink-0 opacity-60" />
+        </a>
+      );
+    }
+    if (msg.msg_type === "geo" && msg.geo_lat !== undefined) {
+      return (
+        <a href={`https://maps.google.com/?q=${msg.geo_lat},${msg.geo_lon}`} target="_blank" rel="noreferrer"
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+          <div className="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center shrink-0">
+            <Icon name="MapPin" size={20} className="text-green-600" />
+          </div>
+          <div>
+            <p className="text-sm font-medium">Геопозиция</p>
+            <p className="text-xs opacity-70">{msg.geo_lat?.toFixed(4)}, {msg.geo_lon?.toFixed(4)}</p>
+          </div>
+          <Icon name="ExternalLink" size={14} className="ml-auto shrink-0 opacity-60" />
+        </a>
+      );
+    }
+    if (msg.msg_type === "contact") {
+      return (
+        <div className="flex items-center gap-2">
+          <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+            <Icon name="User" size={20} className="text-blue-600" />
+          </div>
+          <div>
+            <p className="text-sm font-medium">{msg.contact_name}</p>
+            <p className="text-xs opacity-70">{msg.contact_phone}</p>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div>
+        {replyMsg && <ReplyPreview msg={replyMsg} />}
+        <span className="text-sm leading-relaxed">{msg.text}</span>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {inner()}
+      <div className={`flex items-center justify-end gap-1 mt-0.5 ${msg.out ? "text-white/70" : "text-muted-foreground"}`}>
+        <span className="text-[10px]">{msg.time}</span>
+        {msg.out && (msg.status === "read"
+          ? <Icon name="CheckCheck" size={12} />
+          : <Icon name="Check" size={12} />)}
+      </div>
+    </div>
+  );
+}
+
+function ReplyPreview({ msg }: { msg: Message }) {
+  return (
+    <div className="border-l-2 border-white/50 pl-2 mb-1.5 opacity-80">
+      <p className="text-[11px] truncate max-w-[180px]">{msg.text || "[медиа]"}</p>
     </div>
   );
 }
@@ -169,11 +339,25 @@ export default function Index() {
   const [sending, setSending] = useState(false);
   const [chatsLoading, setChatsLoading] = useState(false);
   const [msgsLoading, setMsgsLoading] = useState(false);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [showAttach, setShowAttach] = useState(false);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+  // Bot
+  const [botMessages, setBotMessages] = useState<BotMessage[]>([]);
+  const [botInput, setBotInput] = useState("");
+  const [botSending, setBotSending] = useState(false);
+  const [activeBotId, setActiveBotId] = useState<string | null>(null);
+  const [subscription, setSubscription] = useState<Record<string, unknown> | null>(null);
+  const [subLoading, setSubLoading] = useState(false);
+  // Avatar
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const botEndRef = useRef<HTMLDivElement>(null);
   const chatsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const msgsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Check session on load
   useEffect(() => {
     const token = getToken();
     if (!token) { setAuthChecked(true); return; }
@@ -219,9 +403,26 @@ export default function Index() {
     return () => { if (msgsPollRef.current) clearInterval(msgsPollRef.current); };
   }, [activeChat, loadMessages]);
 
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => { botEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [botMessages]);
+
+  // Bot load
+  const loadBotHistory = useCallback(async () => {
+    const { ok, data } = await apiFetch(`${BOT_URL}?action=history`);
+    if (ok) setBotMessages(data.messages || []);
+  }, []);
+
+  const loadSubscription = useCallback(async () => {
+    const { ok, data } = await apiFetch(`${BOT_URL}?action=subscription`);
+    if (ok) setSubscription(data.subscription);
+  }, []);
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (user && activeBotId === "worchat_bot") {
+      loadBotHistory();
+      loadSubscription();
+    }
+  }, [user, activeBotId, loadBotHistory, loadSubscription]);
 
   const logout = async () => {
     await apiFetch(AUTH_URL, { method: "POST", body: JSON.stringify({ action: "logout" }) });
@@ -232,6 +433,7 @@ export default function Index() {
 
   const openChat = (chat: ChatItem) => {
     setActiveChat(chat);
+    setReplyTo(null);
     setMobileView("chat");
   };
 
@@ -250,15 +452,23 @@ export default function Index() {
     }
   };
 
-  const sendMessage = async () => {
-    if (!input.trim() || !activeChat || sending) return;
+  const sendMessage = async (overrides?: Partial<Message>) => {
+    if (!activeChat || sending) return;
     const text = input.trim();
+    if (!overrides && !text) return;
     setInput("");
+    setReplyTo(null);
+    setShowAttach(false);
     setSending(true);
-    const { ok, data } = await apiFetch(MESSAGES_URL, {
-      method: "POST",
-      body: JSON.stringify({ action: "send", chat_id: activeChat.chat_id, text })
-    });
+    const payload: Record<string, unknown> = {
+      action: "send",
+      chat_id: activeChat.chat_id,
+      msg_type: "text",
+      text,
+      ...(replyTo ? { reply_to_id: replyTo.id } : {}),
+      ...overrides,
+    };
+    const { ok, data } = await apiFetch(MESSAGES_URL, { method: "POST", body: JSON.stringify(payload) });
     if (ok) {
       setMessages((prev) => [...prev, data.message]);
       loadChats();
@@ -268,6 +478,74 @@ export default function Index() {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  };
+
+  const handleFileUpload = async (file: File, forceType?: string) => {
+    if (!activeChat) return;
+    setUploadingMedia(true);
+    setShowAttach(false);
+    const mime = file.type;
+    const b64 = await fileToBase64(file);
+    const { ok, data } = await apiFetch(UPLOAD_URL, {
+      method: "POST",
+      body: JSON.stringify({ type: "media", mime, data: b64, name: file.name }),
+    });
+    if (!ok) { setUploadingMedia(false); return; }
+    const msgType = forceType || data.category || "document";
+    await sendMessage({
+      msg_type: msgType,
+      media_url: data.url,
+      media_name: file.name,
+      media_size: file.size,
+      text: "",
+    });
+    setUploadingMedia(false);
+  };
+
+  const handleAvatarUpload = async (file: File) => {
+    setAvatarUploading(true);
+    const b64 = await fileToBase64(file);
+    const { ok, data } = await apiFetch(UPLOAD_URL, {
+      method: "POST",
+      body: JSON.stringify({ type: "avatar", mime: file.type, data: b64, name: file.name }),
+    });
+    if (ok && user) setUser({ ...user, avatar_url: data.url });
+    setAvatarUploading(false);
+  };
+
+  const sendGeo = () => {
+    if (!activeChat) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        sendMessage({ msg_type: "geo", geo_lat: pos.coords.latitude, geo_lon: pos.coords.longitude, text: "" });
+      },
+      () => alert("Нет доступа к геолокации"),
+    );
+  };
+
+  const sendBotMessage = async () => {
+    const text = botInput.trim();
+    if (!text || botSending) return;
+    setBotInput("");
+    setBotSending(true);
+    setBotMessages((prev) => [...prev, { id: Date.now(), role: "user", text, time: new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }) }]);
+    const { ok, data } = await apiFetch(BOT_URL, { method: "POST", body: JSON.stringify({ action: "send", text }) });
+    if (ok) {
+      const reply = data.reply;
+      setBotMessages((prev) => [...prev, { id: Date.now() + 1, role: "bot", text: reply.text, extra: reply, time: new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }) }]);
+      if (reply.type === "subscription_offer") loadSubscription();
+    }
+    setBotSending(false);
+  };
+
+  const paySubscription = async () => {
+    setSubLoading(true);
+    const { ok, data } = await apiFetch(BOT_URL, { method: "POST", body: JSON.stringify({ action: "pay_subscription", plan: "stellar" }) });
+    if (ok) {
+      await loadSubscription();
+      await loadBotHistory();
+    }
+    setSubLoading(false);
   };
 
   const filteredChats = chats.filter((c) =>
@@ -309,7 +587,7 @@ export default function Index() {
         </div>
         {navItems.map((item) => (
           <button key={item.id}
-            onClick={() => setSection(item.id)}
+            onClick={() => { setSection(item.id); setActiveBotId(null); }}
             className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all duration-150 relative
               ${section === item.id ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
             title={item.label}>
@@ -320,11 +598,13 @@ export default function Index() {
           </button>
         ))}
         <div className="mt-auto">
-          <button onClick={() => setSection("profile")}
-            className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-semibold text-white transition-all
+          <button onClick={() => { setSection("profile"); setActiveBotId(null); }}
+            className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-semibold text-white transition-all overflow-hidden
               ${section === "profile" ? "ring-2 ring-primary ring-offset-2" : "hover:ring-2 hover:ring-border hover:ring-offset-1"}`}
-            style={{ background: user.avatar_color }}>
-            {user.avatar_initials}
+            style={!user.avatar_url ? { background: user.avatar_color } : {}}>
+            {user.avatar_url
+              ? <img src={user.avatar_url} alt="" className="w-full h-full object-cover" />
+              : user.avatar_initials}
           </button>
         </div>
       </nav>
@@ -336,7 +616,7 @@ export default function Index() {
             <h2 className="text-lg font-semibold">
               {section === "chats" && "Сообщения"}
               {section === "channels" && "Каналы"}
-              {section === "bots" && "Боты"}
+              {section === "bots" && (activeBotId ? "WorChat Bot" : "Боты")}
               {section === "calls" && "Звонки"}
               {section === "contacts" && "Контакты"}
               {section === "archive" && "Архив"}
@@ -344,8 +624,13 @@ export default function Index() {
               {section === "settings" && "Настройки"}
               {section === "profile" && "Профиль"}
             </h2>
+            {section === "bots" && activeBotId && (
+              <button onClick={() => setActiveBotId(null)} className="text-xs text-muted-foreground hover:text-foreground">
+                ← Назад
+              </button>
+            )}
           </div>
-          {(section === "chats" || section === "contacts" || section === "search" || section === "channels" || section === "bots") && (
+          {(section === "chats" || section === "contacts" || section === "search" || section === "channels") && !activeBotId && (
             <div className="relative">
               <Icon name="Search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <input type="text" placeholder="Поиск..." value={searchQuery}
@@ -367,7 +652,7 @@ export default function Index() {
               {!chatsLoading && chats.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground px-4 text-center">
                   <Icon name="MessageSquare" size={36} className="opacity-20" />
-                  <p className="text-sm">Нет чатов. Перейдите в «Контакты», чтобы начать беседу.</p>
+                  <p className="text-sm">Нет чатов. Перейдите в «Контакты».</p>
                   <button onClick={() => setSection("contacts")}
                     className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-medium hover:bg-primary/90 transition-all">
                     Найти собеседника
@@ -387,9 +672,7 @@ export default function Index() {
                     </div>
                     <div className="flex items-center justify-between mt-0.5">
                       <span className="text-xs text-muted-foreground truncate">
-                        {c.last_text
-                          ? (c.last_sender_id === user.id ? `Вы: ${c.last_text}` : c.last_text)
-                          : "Нет сообщений"}
+                        {c.last_text ? (c.last_sender_id === user.id ? `Вы: ${c.last_text}` : c.last_text) : "Нет сообщений"}
                       </span>
                       {c.unread > 0 && (
                         <span className="ml-2 shrink-0 min-w-5 h-5 px-1.5 bg-primary text-white text-xs rounded-full flex items-center justify-center font-medium">
@@ -506,13 +789,30 @@ export default function Index() {
           )}
 
           {/* BOTS */}
-          {section === "bots" && (
+          {section === "bots" && !activeBotId && (
             <div className="px-4 py-2">
+              {/* WorChat Bot — главный */}
+              <button onClick={() => setActiveBotId("worchat_bot")}
+                className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left mb-1">
+                <div className="w-11 h-11 rounded-full flex items-center justify-center text-white shrink-0 relative"
+                  style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
+                  <Icon name="Bot" size={22} />
+                  <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-green-400 border-2 border-white rounded-full" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold">WorChat Bot</span>
+                    <StellarBadge />
+                  </div>
+                  <div className="text-xs text-muted-foreground">Приветствие · Stellar подписка · Помощь</div>
+                </div>
+                <Icon name="ChevronRight" size={15} className="text-muted-foreground shrink-0" />
+              </button>
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mt-4 mb-2 px-2">Другие боты</div>
               {[
-                { name: "ChatGPT Bot", sub: "ИИ-ассистент", icon: "Sparkles", color: "#10b981", badge: "ИИ" },
-                { name: "Переводчик", sub: "Перевод на 100+ языков", icon: "Languages", color: "#6366f1", badge: "" },
-                { name: "Погода", sub: "Прогноз на 7 дней", icon: "CloudSun", color: "#0ea5e9", badge: "" },
-                { name: "Напоминания", sub: "Умный планировщик", icon: "BellRing", color: "#f59e0b", badge: "" },
+                { name: "Переводчик", sub: "Перевод на 100+ языков", icon: "Languages", color: "#6366f1" },
+                { name: "Погода", sub: "Прогноз на 7 дней", icon: "CloudSun", color: "#0ea5e9" },
+                { name: "Напоминания", sub: "Умный планировщик", icon: "BellRing", color: "#f59e0b" },
               ].map((bot) => (
                 <button key={bot.name}
                   className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left">
@@ -521,22 +821,101 @@ export default function Index() {
                     <Icon name={bot.icon} size={20} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{bot.name}</span>
-                      {bot.badge && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary/10 text-primary font-medium">{bot.badge}</span>
-                      )}
-                    </div>
+                    <div className="text-sm font-medium">{bot.name}</div>
                     <div className="text-xs text-muted-foreground">{bot.sub}</div>
                   </div>
-                  <Icon name="ChevronRight" size={15} className="text-muted-foreground shrink-0" />
+                  <span className="text-xs text-muted-foreground">Скоро</span>
                 </button>
               ))}
-              <div className="mt-3 pt-3 border-t border-border">
-                <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border hover:bg-muted/60 transition-colors text-muted-foreground text-sm">
-                  <Icon name="Search" size={16} />
-                  Найти бота
-                </button>
+            </div>
+          )}
+
+          {/* BOT CHAT */}
+          {section === "bots" && activeBotId === "worchat_bot" && (
+            <div className="flex flex-col h-full">
+              {/* Bot header info */}
+              <div className="px-4 py-3 border-b border-border flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0"
+                  style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
+                  <Icon name="Bot" size={18} />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold flex items-center gap-1.5">
+                    WorChat Bot <StellarBadge />
+                  </div>
+                  <div className="text-xs text-green-500">Всегда онлайн</div>
+                </div>
+                {subscription && (
+                  <div className="ml-auto">
+                    <StellarBadge size="lg" />
+                  </div>
+                )}
+              </div>
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2" style={{ background: "hsl(220,15%,97%)" }}>
+                {botMessages.map((msg) => (
+                  <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                    {msg.role === "bot" && (
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-white shrink-0 mr-2 mt-auto"
+                        style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
+                        <Icon name="Bot" size={14} />
+                      </div>
+                    )}
+                    <div className={`max-w-[220px] px-3 py-2 rounded-2xl text-sm leading-relaxed
+                      ${msg.role === "user" ? "msg-out rounded-br-sm text-white" : "bg-white rounded-bl-sm shadow-sm border border-border"}`}>
+                      <p className="whitespace-pre-wrap">{msg.text}</p>
+                      {/* Subscription offer button */}
+                      {msg.role === "bot" && (msg.extra as Record<string, unknown>)?.type === "subscription_offer" && !subscription && (
+                        <button onClick={paySubscription} disabled={subLoading}
+                          className="mt-2 w-full py-2 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-all"
+                          style={{ background: "linear-gradient(135deg, #6366f1, #a855f7, #ec4899)" }}>
+                          {subLoading ? "Оформляем..." : "⭐ Оформить Stellar — 299₽/мес"}
+                        </button>
+                      )}
+                      <div className={`text-[10px] mt-0.5 text-right ${msg.role === "user" ? "text-white/70" : "text-muted-foreground"}`}>
+                        {msg.time}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {botSending && (
+                  <div className="flex justify-start">
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-white shrink-0 mr-2"
+                      style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
+                      <Icon name="Bot" size={14} />
+                    </div>
+                    <div className="px-3 py-3 rounded-2xl bg-white border border-border shadow-sm flex gap-1 items-center">
+                      {[0, 1, 2].map(i => (
+                        <span key={i} className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce" style={{ animationDelay: `${i * 150}ms` }} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div ref={botEndRef} />
+              </div>
+
+              {/* Bot input */}
+              <div className="px-3 py-3 bg-white border-t border-border">
+                <div className="flex items-center gap-2">
+                  <input value={botInput} onChange={(e) => setBotInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendBotMessage(); } }}
+                    placeholder="Напишите боту..."
+                    className="flex-1 px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+                  <button onClick={sendBotMessage} disabled={!botInput.trim() || botSending}
+                    className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
+                      ${botInput.trim() && !botSending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
+                    <Icon name="Send" size={16} />
+                  </button>
+                </div>
+                <div className="flex gap-1.5 mt-2 flex-wrap">
+                  {["/subscription", "/help", "Привет"].map(cmd => (
+                    <button key={cmd} onClick={() => { setBotInput(cmd); }}
+                      className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors">
+                      {cmd}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
@@ -560,14 +939,9 @@ export default function Index() {
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium">{c.display_name}</div>
                         <div className="flex items-center gap-1 mt-0.5">
-                          <Icon
-                            name={type === "in" ? "PhoneIncoming" : type === "out" ? "PhoneOutgoing" : "PhoneMissed"}
-                            size={12}
-                            className={type === "missed" ? "text-destructive" : "text-green-500"}
-                          />
-                          <span className={`text-xs ${type === "missed" ? "text-destructive" : "text-muted-foreground"}`}>
-                            {times[i]}
-                          </span>
+                          <Icon name={type === "in" ? "PhoneIncoming" : type === "out" ? "PhoneOutgoing" : "PhoneMissed"} size={12}
+                            className={type === "missed" ? "text-destructive" : "text-green-500"} />
+                          <span className={`text-xs ${type === "missed" ? "text-destructive" : "text-muted-foreground"}`}>{times[i]}</span>
                         </div>
                       </div>
                       <button className="w-9 h-9 flex items-center justify-center rounded-xl bg-green-50 hover:bg-green-100 transition-colors shrink-0">
@@ -628,12 +1002,32 @@ export default function Index() {
           {section === "profile" && (
             <div className="px-4 py-4">
               <div className="flex flex-col items-center gap-3 py-4">
-                <div className="w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-bold"
-                  style={{ background: user.avatar_color }}>
-                  {user.avatar_initials}
+                {/* Avatar with upload */}
+                <div className="relative group">
+                  {user.avatar_url ? (
+                    <img src={user.avatar_url} alt={user.display_name}
+                      className="w-20 h-20 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-bold"
+                      style={{ background: user.avatar_color }}>
+                      {user.avatar_initials}
+                    </div>
+                  )}
+                  <button onClick={() => avatarInputRef.current?.click()}
+                    disabled={avatarUploading}
+                    className="absolute inset-0 rounded-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    {avatarUploading
+                      ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      : <Icon name="Camera" size={22} className="text-white" />}
+                  </button>
+                  <input ref={avatarInputRef} type="file" accept="image/*" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleAvatarUpload(f); }} />
                 </div>
                 <div className="text-center">
-                  <div className="font-semibold text-base">{user.display_name}</div>
+                  <div className="font-semibold text-base flex items-center gap-2 justify-center">
+                    {user.display_name}
+                    {subscription && <StellarBadge size="lg" />}
+                  </div>
                   <div className="text-sm text-muted-foreground">@{user.username}</div>
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-green-500 font-medium">
@@ -641,8 +1035,30 @@ export default function Index() {
                   В сети
                 </div>
               </div>
+
+              {/* Stellar promo in profile */}
+              {!subscription && (
+                <button onClick={() => { setSection("bots"); setActiveBotId("worchat_bot"); }}
+                  className="w-full mb-3 p-4 rounded-2xl text-white text-left"
+                  style={{ background: "linear-gradient(135deg, #6366f1, #a855f7, #ec4899)" }}>
+                  <div className="text-sm font-bold mb-0.5">⭐ Получить Stellar</div>
+                  <div className="text-xs opacity-90">Безлимит · Эксклюзив · 4K звонки · от 299₽/мес</div>
+                </button>
+              )}
+
+              <button onClick={() => avatarInputRef.current?.click()}
+                disabled={avatarUploading}
+                className="w-full flex items-center gap-3 py-3 px-2 hover:bg-muted/60 rounded-xl transition-colors text-left mb-1">
+                <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center">
+                  <Icon name="Camera" size={17} />
+                </div>
+                <span className="text-sm font-medium">Сменить фото профиля</span>
+              </button>
+              <input ref={avatarInputRef} type="file" accept="image/*" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleAvatarUpload(f); }} />
+
               <button onClick={logout}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-red-50 hover:bg-red-100 transition-colors text-destructive text-sm font-medium mt-2">
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-red-50 hover:bg-red-100 transition-colors text-destructive text-sm font-medium mt-3">
                 <Icon name="LogOut" size={16} />
                 Выйти из аккаунта
               </button>
@@ -701,27 +1117,109 @@ export default function Index() {
               )}
               {messages.map((msg, i) => (
                 <div key={msg.id}
-                  className={`flex ${msg.out ? "justify-end" : "justify-start"} animate-slide-up`}
+                  className={`flex ${msg.out ? "justify-end" : "justify-start"} animate-slide-up group`}
                   style={{ animationDelay: `${Math.min(i, 8) * 20}ms` }}>
-                  <div className={`max-w-xs lg:max-w-md px-3.5 py-2 rounded-2xl text-sm leading-relaxed
-                    ${msg.out ? "msg-out rounded-br-sm" : "msg-in rounded-bl-sm shadow-sm border border-border"}`}>
-                    <span>{msg.text}</span>
-                    <div className={`flex items-center justify-end gap-1 mt-0.5 ${msg.out ? "text-white/70" : "text-muted-foreground"}`}>
-                      <span className="text-[10px]">{msg.time}</span>
-                      {msg.out && (msg.status === "read"
-                        ? <Icon name="CheckCheck" size={12} />
-                        : <Icon name="Check" size={12} />)}
+                  <div className="relative">
+                    <div className={`max-w-xs lg:max-w-md px-3.5 py-2 rounded-2xl
+                      ${msg.out ? "msg-out rounded-br-sm" : "msg-in rounded-bl-sm shadow-sm border border-border"}`}>
+                      <MessageBubble msg={msg} allMessages={messages} />
                     </div>
+                    {/* Reply button */}
+                    <button onClick={() => setReplyTo(msg)}
+                      className={`absolute top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity
+                        w-7 h-7 flex items-center justify-center rounded-full bg-white shadow-sm border border-border
+                        ${msg.out ? "-left-9" : "-right-9"}`}>
+                      <Icon name="Reply" size={13} className="text-muted-foreground" />
+                    </button>
                   </div>
                 </div>
               ))}
+              {uploadingMedia && (
+                <div className="flex justify-end">
+                  <div className="px-4 py-3 rounded-2xl msg-out flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span className="text-white text-sm">Загрузка...</span>
+                  </div>
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
 
+            {/* Reply preview */}
+            {replyTo && (
+              <div className="px-4 py-2 bg-white border-t border-border flex items-center gap-2 shrink-0">
+                <div className="flex-1 border-l-2 border-primary pl-2">
+                  <p className="text-xs text-primary font-medium">Ответ</p>
+                  <p className="text-xs text-muted-foreground truncate">{replyTo.text || "[медиа]"}</p>
+                </div>
+                <button onClick={() => setReplyTo(null)} className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-muted">
+                  <Icon name="X" size={14} className="text-muted-foreground" />
+                </button>
+              </div>
+            )}
+
+            {/* Attach menu */}
+            {showAttach && (
+              <div className="px-4 pb-2 bg-white border-t border-border shrink-0">
+                <div className="grid grid-cols-4 gap-2 pt-3">
+                  {[
+                    { icon: "Image", label: "Фото", accept: "image/*", type: "image" },
+                    { icon: "Video", label: "Видео", accept: "video/*", type: "video" },
+                    { icon: "Music", label: "Музыка", accept: "audio/*", type: "audio" },
+                    { icon: "FileText", label: "Файл", accept: "*/*", type: "document" },
+                  ].map((item) => (
+                    <button key={item.label}
+                      onClick={() => { fileInputRef.current?.setAttribute("accept", item.accept); fileInputRef.current?.setAttribute("data-type", item.type); fileInputRef.current?.click(); }}
+                      className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                        <Icon name={item.icon} size={20} className="text-primary" />
+                      </div>
+                      <span className="text-xs text-muted-foreground">{item.label}</span>
+                    </button>
+                  ))}
+                  <button onClick={sendGeo}
+                    className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
+                    <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
+                      <Icon name="MapPin" size={20} className="text-green-600" />
+                    </div>
+                    <span className="text-xs text-muted-foreground">Геолокация</span>
+                  </button>
+                  <button onClick={() => {
+                    const name = prompt("Имя контакта:");
+                    const phone = prompt("Телефон:");
+                    if (name && phone) sendMessage({ msg_type: "contact", contact_name: name, contact_phone: phone, text: "" });
+                    setShowAttach(false);
+                  }}
+                    className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
+                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                      <Icon name="UserPlus" size={20} className="text-blue-600" />
+                    </div>
+                    <span className="text-xs text-muted-foreground">Контакт</span>
+                  </button>
+                  <button onClick={() => setShowAttach(false)}
+                    className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
+                    <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                      <Icon name="X" size={20} className="text-muted-foreground" />
+                    </div>
+                    <span className="text-xs text-muted-foreground">Закрыть</span>
+                  </button>
+                </div>
+                <input ref={fileInputRef} type="file" className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    const t = fileInputRef.current?.getAttribute("data-type") || undefined;
+                    if (f) handleFileUpload(f, t);
+                    e.target.value = "";
+                  }} />
+              </div>
+            )}
+
             <div className="px-4 py-3 bg-white border-t border-border shrink-0">
               <div className="flex items-end gap-2">
-                <button className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors shrink-0">
-                  <Icon name="Paperclip" size={18} className="text-muted-foreground" />
+                <button onClick={() => setShowAttach(!showAttach)}
+                  className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors shrink-0
+                    ${showAttach ? "bg-primary text-white" : "hover:bg-muted text-muted-foreground"}`}>
+                  <Icon name="Paperclip" size={18} />
                 </button>
                 <textarea value={input} onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown} placeholder="Сообщение..." rows={1}
@@ -730,7 +1228,7 @@ export default function Index() {
                 <button className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors shrink-0">
                   <Icon name="Smile" size={18} className="text-muted-foreground" />
                 </button>
-                <button onClick={sendMessage} disabled={!input.trim() || sending}
+                <button onClick={() => sendMessage()} disabled={!input.trim() || sending}
                   className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
                     ${input.trim() && !sending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
                   {sending
