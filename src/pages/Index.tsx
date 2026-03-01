@@ -153,7 +153,7 @@ function Avatar({ user, size = 11, dot = true }: { user: User; size?: number; do
 }
 
 // ─── Main App ────────────────────────────────────────────────────────────────
-type Section = "chats" | "contacts" | "archive" | "search" | "settings" | "profile";
+type Section = "chats" | "channels" | "bots" | "calls" | "contacts" | "archive" | "search" | "settings" | "profile";
 
 export default function Index() {
   const [user, setUser] = useState<User | null>(null);
@@ -203,7 +203,7 @@ export default function Index() {
   }, []);
 
   useEffect(() => {
-    if (user && (section === "contacts" || section === "search")) loadContacts();
+    if (user && (section === "contacts" || section === "search" || section === "calls")) loadContacts();
   }, [user, section, loadContacts]);
 
   const loadMessages = useCallback(async (chatId: number) => {
@@ -290,8 +290,10 @@ export default function Index() {
 
   const navItems: { id: Section; icon: string; label: string }[] = [
     { id: "chats", icon: "MessageSquare", label: "Чаты" },
+    { id: "channels", icon: "Rss", label: "Каналы" },
+    { id: "bots", icon: "Bot", label: "Боты" },
+    { id: "calls", icon: "Phone", label: "Звонки" },
     { id: "contacts", icon: "Users", label: "Контакты" },
-    { id: "archive", icon: "Archive", label: "Архив" },
     { id: "search", icon: "Search", label: "Поиск" },
     { id: "settings", icon: "Settings", label: "Настройки" },
   ];
@@ -333,6 +335,9 @@ export default function Index() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">
               {section === "chats" && "Сообщения"}
+              {section === "channels" && "Каналы"}
+              {section === "bots" && "Боты"}
+              {section === "calls" && "Звонки"}
               {section === "contacts" && "Контакты"}
               {section === "archive" && "Архив"}
               {section === "search" && "Поиск"}
@@ -340,7 +345,7 @@ export default function Index() {
               {section === "profile" && "Профиль"}
             </h2>
           </div>
-          {(section === "chats" || section === "contacts" || section === "search") && (
+          {(section === "chats" || section === "contacts" || section === "search" || section === "channels" || section === "bots") && (
             <div className="relative">
               <Icon name="Search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <input type="text" placeholder="Поиск..." value={searchQuery}
@@ -466,6 +471,124 @@ export default function Index() {
             <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
               <Icon name="Archive" size={36} className="opacity-25" />
               <p className="text-sm">Архив пуст</p>
+            </div>
+          )}
+
+          {/* CHANNELS */}
+          {section === "channels" && (
+            <div className="px-4 py-2">
+              {[
+                { name: "WorChat Новости", sub: "Официальный канал", members: "12.4K", icon: "Rss", color: "#6366f1" },
+                { name: "Технологии", sub: "Последние новости IT", members: "8.1K", icon: "Cpu", color: "#0ea5e9" },
+                { name: "Дизайн", sub: "UI/UX вдохновение", members: "5.3K", icon: "Palette", color: "#f59e0b" },
+                { name: "Крипто", sub: "Курсы и аналитика", members: "21K", icon: "TrendingUp", color: "#10b981" },
+              ].map((ch) => (
+                <button key={ch.name}
+                  className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left">
+                  <div className="w-11 h-11 rounded-full flex items-center justify-center text-white shrink-0"
+                    style={{ background: ch.color }}>
+                    <Icon name={ch.icon} size={20} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{ch.name}</div>
+                    <div className="text-xs text-muted-foreground truncate">{ch.sub}</div>
+                  </div>
+                  <div className="text-xs text-muted-foreground shrink-0">{ch.members}</div>
+                </button>
+              ))}
+              <div className="mt-3 pt-3 border-t border-border">
+                <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border hover:bg-muted/60 transition-colors text-muted-foreground text-sm">
+                  <Icon name="Plus" size={16} />
+                  Создать канал
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* BOTS */}
+          {section === "bots" && (
+            <div className="px-4 py-2">
+              {[
+                { name: "ChatGPT Bot", sub: "ИИ-ассистент", icon: "Sparkles", color: "#10b981", badge: "ИИ" },
+                { name: "Переводчик", sub: "Перевод на 100+ языков", icon: "Languages", color: "#6366f1", badge: "" },
+                { name: "Погода", sub: "Прогноз на 7 дней", icon: "CloudSun", color: "#0ea5e9", badge: "" },
+                { name: "Напоминания", sub: "Умный планировщик", icon: "BellRing", color: "#f59e0b", badge: "" },
+              ].map((bot) => (
+                <button key={bot.name}
+                  className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left">
+                  <div className="w-11 h-11 rounded-full flex items-center justify-center text-white shrink-0"
+                    style={{ background: bot.color }}>
+                    <Icon name={bot.icon} size={20} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{bot.name}</span>
+                      {bot.badge && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary/10 text-primary font-medium">{bot.badge}</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{bot.sub}</div>
+                  </div>
+                  <Icon name="ChevronRight" size={15} className="text-muted-foreground shrink-0" />
+                </button>
+              ))}
+              <div className="mt-3 pt-3 border-t border-border">
+                <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border hover:bg-muted/60 transition-colors text-muted-foreground text-sm">
+                  <Icon name="Search" size={16} />
+                  Найти бота
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* CALLS */}
+          {section === "calls" && (
+            <div className="px-4 py-2">
+              {contacts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
+                  <Icon name="PhoneMissed" size={36} className="opacity-25" />
+                  <p className="text-sm">Нет звонков</p>
+                </div>
+              ) : (
+                contacts.slice(0, 6).map((c, i) => {
+                  const types = ["in", "out", "missed"] as const;
+                  const type = types[i % 3];
+                  const times = ["Сегодня, 14:22", "Вчера, 09:10", "27 фев, 18:45", "26 фев, 12:00", "25 фев, 20:33", "24 фев, 08:15"];
+                  return (
+                    <div key={c.id} className="flex items-center gap-3 py-3 px-2 hover:bg-muted/60 rounded-xl transition-colors">
+                      <Avatar user={c} size={10} dot={false} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium">{c.display_name}</div>
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <Icon
+                            name={type === "in" ? "PhoneIncoming" : type === "out" ? "PhoneOutgoing" : "PhoneMissed"}
+                            size={12}
+                            className={type === "missed" ? "text-destructive" : "text-green-500"}
+                          />
+                          <span className={`text-xs ${type === "missed" ? "text-destructive" : "text-muted-foreground"}`}>
+                            {times[i]}
+                          </span>
+                        </div>
+                      </div>
+                      <button className="w-9 h-9 flex items-center justify-center rounded-xl bg-green-50 hover:bg-green-100 transition-colors shrink-0">
+                        <Icon name="Phone" size={16} className="text-green-600" />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+              {contacts.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-border flex gap-2">
+                  <button className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-green-50 hover:bg-green-100 transition-colors text-green-700 text-sm font-medium">
+                    <Icon name="Phone" size={16} />
+                    Позвонить
+                  </button>
+                  <button className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-primary/10 hover:bg-primary/20 transition-colors text-primary text-sm font-medium">
+                    <Icon name="Video" size={16} />
+                    Видео
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
