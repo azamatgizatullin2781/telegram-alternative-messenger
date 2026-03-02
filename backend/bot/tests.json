@@ -5,6 +5,32 @@
       "method": "OPTIONS",
       "path": "/",
       "expectedStatus": 200
+    },
+    {
+      "name": "Get history without token",
+      "method": "GET",
+      "path": "/?action=history",
+      "expectedStatus": 401
+    },
+    {
+      "name": "Get subscription without token",
+      "method": "GET",
+      "path": "/?action=subscription",
+      "expectedStatus": 401
+    },
+    {
+      "name": "Send message without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "send", "text": "hello"},
+      "expectedStatus": 401
+    },
+    {
+      "name": "Pay subscription without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "pay_subscription", "plan": "premium"},
+      "expectedStatus": 401
     }
   ]
 }

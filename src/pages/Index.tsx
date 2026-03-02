@@ -7,8 +7,9 @@ const CHATS_URL = func2url.chats;
 const MESSAGES_URL = func2url.messages;
 const BOT_URL = func2url.bot;
 const UPLOAD_URL = func2url.upload;
+const CALLS_URL = (func2url as Record<string, string>).calls || "";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 interface User {
   id: number;
   username: string;
@@ -37,12 +38,11 @@ interface Message {
   media_url?: string;
   media_name?: string;
   media_size?: number;
-  media_duration?: number;
+  reply_to_id?: number;
   geo_lat?: number;
   geo_lon?: number;
   contact_name?: string;
   contact_phone?: string;
-  reply_to_id?: number;
 }
 interface BotMessage {
   id: number;
@@ -50,6 +50,13 @@ interface BotMessage {
   text: string;
   extra?: Record<string, unknown>;
   time: string;
+}
+interface CallSession {
+  id: number;
+  room_id: string;
+  call_type: "audio" | "video";
+  status: string;
+  caller: User;
 }
 type Theme = "light" | "dark" | "system";
 type Accent = "blue" | "green" | "purple" | "red" | "orange" | "pink";
@@ -69,21 +76,14 @@ interface DeviceInfo {
   name: string;
   os: string;
   browser: string;
-  ip: string;
-  lastSeen: string;
   current: boolean;
 }
+type Section = "chats" | "channels" | "bots" | "contacts" | "calls" | "search" | "settings" | "profile";
 
 const DEFAULT_SETTINGS: AppSettings = {
-  theme: "light",
-  accent: "blue",
-  wallpaper: "plain",
-  notifications: true,
-  notifSound: true,
-  notifPreview: true,
-  language: "ru",
-  region: "RU",
-  fontSize: "md",
+  theme: "light", accent: "blue", wallpaper: "plain",
+  notifications: true, notifSound: true, notifPreview: true,
+  language: "ru", region: "RU", fontSize: "md",
 };
 
 const LANGUAGES = [
@@ -108,10 +108,10 @@ const REGIONS = [
   { code: "GB", label: "Великобритания", flag: "🇬🇧" },
   { code: "TR", label: "Турция", flag: "🇹🇷" },
   { code: "CN", label: "Китай", flag: "🇨🇳" },
-  { code: "OTHER", label: "Другой регион", flag: "🌐" },
+  { code: "OTHER", label: "Другой", flag: "🌐" },
 ];
 
-// ─── API helpers ─────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 const getToken = () => localStorage.getItem("wc_token") || "";
 async function apiFetch(url: string, opts: RequestInit = {}) {
   const token = getToken();
@@ -132,28 +132,18 @@ function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
-function formatBytes(bytes: number): string {
+function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} Б`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / 1048576).toFixed(1)} МБ`;
 }
 function formatPhone(raw: string) {
-  const digits = raw.replace(/\D/g, "");
-  let result = digits;
-  if (digits.startsWith("7") && digits.length <= 11) {
-    const d = digits.slice(1);
-    result = "+7" + (d.length > 0 ? " (" + d.slice(0, 3) : "");
-    if (d.length > 3) result += ") " + d.slice(3, 6);
-    if (d.length > 6) result += "-" + d.slice(6, 8);
-    if (d.length > 8) result += "-" + d.slice(8, 10);
-  } else if (digits.startsWith("8") && digits.length <= 11) {
-    const d = digits.slice(1);
-    result = "+7" + (d.length > 0 ? " (" + d.slice(0, 3) : "");
-    if (d.length > 3) result += ") " + d.slice(3, 6);
-    if (d.length > 6) result += "-" + d.slice(6, 8);
-    if (d.length > 8) result += "-" + d.slice(8, 10);
+  const d = raw.replace(/\D/g, "");
+  if ((d.startsWith("7") || d.startsWith("8")) && d.length === 11) {
+    const n = d.slice(1);
+    return `+7 (${n.slice(0, 3)}) ${n.slice(3, 6)}-${n.slice(6, 8)}-${n.slice(8, 10)}`;
   }
-  return result;
+  return raw;
 }
 function detectBrowser() {
   const ua = navigator.userAgent;
@@ -172,19 +162,15 @@ function detectOS() {
   if (ua.includes("Linux")) return "Linux";
   return "Неизвестно";
 }
-
-// ─── Apply theme to DOM ───────────────────────────────────────────────────────
-function applyTheme(settings: AppSettings) {
+function applyTheme(s: AppSettings) {
   const root = document.documentElement;
-  const resolvedTheme =
-    settings.theme === "system"
-      ? window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-      : settings.theme;
-  root.setAttribute("data-theme", resolvedTheme);
-  root.setAttribute("data-accent", settings.accent === "blue" ? "" : settings.accent);
-  root.setAttribute("data-wallpaper", settings.wallpaper);
-  root.style.fontSize =
-    settings.fontSize === "sm" ? "14px" : settings.fontSize === "lg" ? "18px" : "16px";
+  const resolved = s.theme === "system"
+    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    : s.theme;
+  root.setAttribute("data-theme", resolved);
+  root.setAttribute("data-accent", s.accent === "blue" ? "" : s.accent);
+  root.setAttribute("data-wallpaper", s.wallpaper);
+  root.style.fontSize = s.fontSize === "sm" ? "14px" : s.fontSize === "lg" ? "18px" : "16px";
 }
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
@@ -197,56 +183,47 @@ function OnboardingScreen({ onDone }: { onDone: (lang: string, region: string) =
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
       <div className="w-full max-w-sm animate-fade-in">
-        {/* WELCOME */}
         {step === "welcome" && (
           <div className="text-center">
             <div className="w-24 h-24 rounded-3xl bg-primary flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-primary/30">
               <Icon name="Lock" size={44} className="text-white" />
             </div>
-            <h1 className="text-3xl font-bold text-foreground mb-2">WorChat</h1>
-            <p className="text-muted-foreground mb-2 text-sm">Защищённый мессенджер нового поколения</p>
-            <div className="flex items-center justify-center gap-4 mb-8 mt-4">
-              {[
-                { icon: "Shield", label: "E2E шифрование" },
-                { icon: "Zap", label: "Быстрый" },
-                { icon: "Globe", label: "Везде" },
-              ].map((f) => (
-                <div key={f.label} className="flex flex-col items-center gap-1">
-                  <div className="w-10 h-10 rounded-2xl bg-primary/10 flex items-center justify-center">
-                    <Icon name={f.icon} size={18} className="text-primary" />
+            <h1 className="text-3xl font-bold mb-2">WorChat</h1>
+            <p className="text-muted-foreground text-sm mb-8">Защищённый мессенджер нового поколения</p>
+            <div className="flex justify-center gap-6 mb-8">
+              {[{ icon: "Shield", label: "E2E" }, { icon: "Zap", label: "Быстрый" }, { icon: "Globe", label: "Везде" }].map(f => (
+                <div key={f.label} className="flex flex-col items-center gap-1.5">
+                  <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
+                    <Icon name={f.icon} size={22} className="text-primary" />
                   </div>
-                  <span className="text-[11px] text-muted-foreground">{f.label}</span>
+                  <span className="text-xs text-muted-foreground">{f.label}</span>
                 </div>
               ))}
             </div>
             <button onClick={() => setStep("language")}
-              className="w-full py-3.5 rounded-2xl bg-primary text-white font-semibold text-base hover:bg-primary/90 transition-all shadow-lg shadow-primary/20">
+              className="w-full py-3.5 rounded-2xl bg-primary text-white font-semibold hover:bg-primary/90 transition-all shadow-lg shadow-primary/20">
               Начать
             </button>
           </div>
         )}
-
-        {/* LANGUAGE */}
         {step === "language" && (
           <div>
             <div className="text-center mb-6">
               <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-3">
                 <Icon name="Globe" size={28} className="text-primary" />
               </div>
-              <h2 className="text-xl font-bold text-foreground">Язык и регион</h2>
-              <p className="text-sm text-muted-foreground mt-1">Выберите удобные настройки</p>
+              <h2 className="text-xl font-bold">Язык и регион</h2>
             </div>
             <div className="bg-white rounded-2xl shadow-sm border border-border p-4 space-y-4">
               <div>
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Язык интерфейса</label>
+                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Язык</label>
                 <div className="grid grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1">
-                  {LANGUAGES.map((l) => (
+                  {LANGUAGES.map(l => (
                     <button key={l.code} onClick={() => setLang(l.code)}
                       className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-all text-left
-                        ${lang === l.code ? "bg-primary text-white font-medium" : "bg-muted hover:bg-muted/80"}`}>
-                      <span className="text-base">{l.flag}</span>
-                      <span className="truncate">{l.label}</span>
-                      {lang === l.code && <Icon name="Check" size={14} className="ml-auto shrink-0" />}
+                        ${lang === l.code ? "bg-primary text-white" : "bg-muted hover:bg-muted/80"}`}>
+                      <span>{l.flag}</span><span className="truncate">{l.label}</span>
+                      {lang === l.code && <Icon name="Check" size={13} className="ml-auto shrink-0" />}
                     </button>
                   ))}
                 </div>
@@ -254,76 +231,49 @@ function OnboardingScreen({ onDone }: { onDone: (lang: string, region: string) =
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Регион</label>
                 <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto pr-1">
-                  {REGIONS.map((r) => (
+                  {REGIONS.map(r => (
                     <button key={r.code} onClick={() => setRegion(r.code)}
                       className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-all text-left
-                        ${region === r.code ? "bg-primary text-white font-medium" : "bg-muted hover:bg-muted/80"}`}>
-                      <span className="text-base">{r.flag}</span>
-                      <span className="truncate">{r.label}</span>
-                      {region === r.code && <Icon name="Check" size={14} className="ml-auto shrink-0" />}
+                        ${region === r.code ? "bg-primary text-white" : "bg-muted hover:bg-muted/80"}`}>
+                      <span>{r.flag}</span><span className="truncate">{r.label}</span>
+                      {region === r.code && <Icon name="Check" size={13} className="ml-auto shrink-0" />}
                     </button>
                   ))}
                 </div>
               </div>
             </div>
             <button onClick={() => setStep("terms")}
-              className="w-full mt-4 py-3.5 rounded-2xl bg-primary text-white font-semibold text-base hover:bg-primary/90 transition-all">
+              className="w-full mt-4 py-3.5 rounded-2xl bg-primary text-white font-semibold hover:bg-primary/90 transition-all">
               Продолжить
             </button>
           </div>
         )}
-
-        {/* TERMS */}
         {step === "terms" && (
           <div>
             <div className="text-center mb-5">
               <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-3">
                 <Icon name="FileText" size={28} className="text-primary" />
               </div>
-              <h2 className="text-xl font-bold text-foreground">Пользовательское соглашение</h2>
+              <h2 className="text-xl font-bold">Пользовательское соглашение</h2>
             </div>
-            <div className="bg-white rounded-2xl shadow-sm border border-border p-4 max-h-72 overflow-y-auto text-sm text-muted-foreground space-y-3 mb-4">
-              <p className="font-semibold text-foreground">Условия использования WorChat</p>
-              <p>Настоящее Пользовательское соглашение регулирует использование мессенджера WorChat («Сервис»), доступного на платформах Android, iOS и Web.</p>
-              <p className="font-medium text-foreground">1. Соответствие законодательству РФ</p>
-              <p>Пользователь обязуется не использовать Сервис для распространения материалов, запрещённых законодательством Российской Федерации, в том числе:</p>
-              <ul className="list-disc pl-4 space-y-1">
-                <li>Призывов к экстремизму, терроризму и насилию (ФЗ № 114-ФЗ)</li>
-                <li>Распространения наркотических и психотропных веществ (УК РФ ст. 228)</li>
-                <li>Детской порнографии и сексуализации несовершеннолетних (УК РФ ст. 242.1)</li>
-                <li>Оскорбления религиозных чувств верующих (УК РФ ст. 148)</li>
-                <li>Нарушения авторских прав (ГК РФ ч. IV)</li>
-                <li>Мошенничества и финансовых пирамид (УК РФ ст. 159)</li>
-                <li>Распространения персональных данных третьих лиц без согласия (ФЗ № 152-ФЗ)</li>
-              </ul>
-              <p className="font-medium text-foreground">2. Конфиденциальность</p>
-              <p>WorChat использует сквозное шифрование. Персональные данные хранятся в соответствии с ФЗ № 152-ФЗ «О персональных данных» на серверах, расположенных на территории РФ.</p>
-              <p className="font-medium text-foreground">3. Ответственность</p>
-              <p>За нарушение условий настоящего соглашения Администрация вправе заблокировать аккаунт без предварительного уведомления. Пользователь несёт полную ответственность за публикуемый контент согласно действующему законодательству РФ.</p>
-              <p className="font-medium text-foreground">4. Возраст</p>
-              <p>Использование Сервиса разрешено лицам, достигшим 16 лет. Лица до 16 лет вправе использовать Сервис только с согласия родителей или законных представителей.</p>
-              <p className="font-medium text-foreground">5. Изменения</p>
-              <p>WorChat оставляет за собой право изменять условия соглашения. Продолжение использования Сервиса означает принятие новых условий.</p>
-              <p className="text-xs text-muted-foreground/60 mt-2">Последнее обновление: март 2026 г.</p>
+            <div className="bg-white rounded-2xl border border-border p-4 text-xs text-muted-foreground max-h-64 overflow-y-auto space-y-2 mb-4">
+              <p className="font-semibold text-foreground">WorChat — Условия использования</p>
+              <p>Настоящее Соглашение регулирует использование мессенджера WorChat в соответствии с законодательством РФ (ФЗ №149 «Об информации», ФЗ №152 «О персональных данных»).</p>
+              <p>Все сообщения защищены сквозным шифрованием AES-512. Мы не имеем доступа к содержанию ваших переписок.</p>
+              <p>Персональные данные обрабатываются строго в целях функционирования сервиса и не передаются третьим лицам без вашего согласия.</p>
+              <p>Использование сервиса запрещено лицам младше 13 лет. Запрещено распространение незаконного контента.</p>
             </div>
-            <label className="flex items-start gap-3 cursor-pointer mb-4">
+            <label className="flex items-center gap-3 mb-4 cursor-pointer">
               <div onClick={() => setAgreed(!agreed)}
-                className={`w-5 h-5 rounded-md border-2 shrink-0 mt-0.5 flex items-center justify-center transition-all
+                className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all shrink-0
                   ${agreed ? "bg-primary border-primary" : "border-border"}`}>
                 {agreed && <Icon name="Check" size={12} className="text-white" />}
               </div>
-              <span className="text-sm text-muted-foreground">
-                Я прочитал(а) и принимаю условия Пользовательского соглашения. Мне исполнилось 16 лет.
-              </span>
+              <span className="text-sm text-muted-foreground">Я принимаю условия использования</span>
             </label>
-            <button onClick={() => { if (agreed) onDone(lang, region); }}
-              disabled={!agreed}
-              className="w-full py-3.5 rounded-2xl bg-primary text-white font-semibold text-base hover:bg-primary/90 transition-all disabled:opacity-40">
-              Принять и продолжить
-            </button>
-            <button onClick={() => setStep("language")}
-              className="w-full mt-2 py-2.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
-              Назад
+            <button onClick={() => agreed && onDone(lang, region)} disabled={!agreed}
+              className="w-full py-3.5 rounded-2xl bg-primary text-white font-semibold hover:bg-primary/90 transition-all disabled:opacity-40">
+              Войти в WorChat
             </button>
           </div>
         )}
@@ -332,113 +282,87 @@ function OnboardingScreen({ onDone }: { onDone: (lang: string, region: string) =
   );
 }
 
-// ─── Auth Screen ──────────────────────────────────────────────────────────────
-function AuthScreen({ onAuth }: { onAuth: (user: User) => void }) {
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+function AuthScreen({ onAuth }: { onAuth: (u: User) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [phone, setPhone] = useState("");
   const [form, setForm] = useState({ display_name: "", password: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const set = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
-
+  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
   const handlePhone = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value.replace(/\D/g, "");
-    let digits = raw;
-    if (digits.startsWith("8")) digits = "7" + digits.slice(1);
-    if (!digits.startsWith("7") && digits.length > 0) digits = "7" + digits;
-    setPhone(digits.slice(0, 11));
+    const val = e.target.value.replace(/\D/g, "");
+    setPhone(val.startsWith("8") ? "7" + val.slice(1) : val);
   };
-
-  const displayPhone = () => {
-    if (!phone) return "";
-    const d = phone;
-    let r = "+7";
-    if (d.length > 1) r += " (" + d.slice(1, 4);
-    if (d.length > 4) r += ") " + d.slice(4, 7);
-    if (d.length > 7) r += "-" + d.slice(7, 9);
-    if (d.length > 9) r += "-" + d.slice(9, 11);
-    return r;
-  };
+  const displayPhone = () => formatPhone(phone);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
-    if (phone.length < 11) { setError("Введите корректный номер телефона"); return; }
-    setLoading(true);
-    const username = phone;
-    const body: Record<string, string> = { action: mode, username, password: form.password };
-    if (mode === "register") body.display_name = form.display_name || displayPhone();
-    const { ok, data } = await apiFetch(AUTH_URL, { method: "POST", body: JSON.stringify(body) });
+    setError(""); setLoading(true);
+    const { ok, data } = await apiFetch(AUTH_URL, {
+      method: "POST",
+      body: JSON.stringify({ action: mode, username: phone, ...form }),
+    });
     setLoading(false);
-    if (!ok) { setError(data.error || "Ошибка сервера"); return; }
-    localStorage.setItem("wc_token", data.token);
-    onAuth(data.user);
+    if (ok) { localStorage.setItem("wc_token", data.token); onAuth(data.user); }
+    else setError(data.error || "Ошибка авторизации");
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm animate-fade-in">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center mx-auto mb-4 shadow-lg shadow-primary/20">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-blue-50 p-4">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-7">
+          <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center mx-auto mb-4 shadow-xl shadow-primary/25">
             <Icon name="Lock" size={28} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-foreground">WorChat</h1>
-          <p className="text-sm text-muted-foreground mt-1">Защищённый мессенджер</p>
+          <h1 className="text-2xl font-bold">WorChat</h1>
+          <p className="text-sm text-muted-foreground mt-1">{mode === "login" ? "Войдите в аккаунт" : "Создайте аккаунт"}</p>
         </div>
-
-        <div className="bg-white rounded-2xl shadow-sm border border-border p-6">
-          <div className="flex bg-muted rounded-xl p-1 mb-6">
-            {(["login", "register"] as const).map((m) => (
+        <div className="bg-white rounded-2xl shadow-sm border border-border p-5">
+          <div className="flex mb-5 bg-muted rounded-xl p-0.5">
+            {(["login", "register"] as const).map(m => (
               <button key={m} onClick={() => { setMode(m); setError(""); }}
-                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all
-                  ${mode === m ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all
+                  ${mode === m ? "bg-white shadow-sm text-foreground" : "text-muted-foreground"}`}>
                 {m === "login" ? "Вход" : "Регистрация"}
               </button>
             ))}
           </div>
-
           <form onSubmit={submit} className="space-y-3">
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Номер телефона</label>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Телефон</label>
               <div className="relative">
                 <Icon name="Phone" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <input
-                  type="tel"
-                  value={displayPhone()}
-                  onChange={handlePhone}
-                  placeholder="+7 (___) ___-__-__"
-                  required
-                  className="w-full pl-9 pr-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 transition-all" />
+                <input type="tel" value={displayPhone()} onChange={handlePhone} placeholder="+7 (___) ___-__-__" required
+                  className="w-full pl-9 pr-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
               </div>
             </div>
             {mode === "register" && (
               <div className="animate-fade-in">
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">Имя</label>
-                <input type="text" value={form.display_name} onChange={(e) => set("display_name", e.target.value)}
+                <input type="text" value={form.display_name} onChange={e => set("display_name", e.target.value)}
                   placeholder="Иван Иванов"
-                  className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 transition-all" />
+                  className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
               </div>
             )}
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Пароль</label>
-              <input type="password" value={form.password} onChange={(e) => set("password", e.target.value)}
+              <input type="password" value={form.password} onChange={e => set("password", e.target.value)}
                 placeholder="••••••" required autoComplete="current-password"
-                className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 transition-all" />
+                className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
             </div>
             {error && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-destructive/10 text-destructive text-sm animate-fade-in">
-                <Icon name="AlertCircle" size={14} />
-                {error}
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-destructive/10 text-destructive text-sm">
+                <Icon name="AlertCircle" size={14} />{error}
               </div>
             )}
             <button type="submit" disabled={loading}
-              className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-all disabled:opacity-60 mt-2">
+              className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-all disabled:opacity-60 mt-1">
               {loading ? "Загрузка..." : mode === "login" ? "Войти" : "Создать аккаунт"}
             </button>
           </form>
-
-          <div className="flex items-center gap-1.5 justify-center mt-5">
+          <div className="flex items-center justify-center gap-1.5 mt-4">
             <Icon name="Lock" size={11} className="text-green-500" />
             <span className="text-xs text-muted-foreground">Сквозное шифрование · WorChat</span>
           </div>
@@ -449,18 +373,15 @@ function AuthScreen({ onAuth }: { onAuth: (user: User) => void }) {
 }
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
-function Avatar({ user, size = 11, dot = true }: { user: User; size?: number; dot?: boolean }) {
-  const sz = size === 9 ? "w-9 h-9 text-xs" : size === 10 ? "w-10 h-10 text-sm" : "w-11 h-11 text-sm";
-  const px = size === 9 ? 36 : size === 10 ? 40 : 44;
+function Avatar({ user, size = 44, dot = true }: { user: User; size?: number; dot?: boolean }) {
   return (
-    <div className="relative shrink-0">
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
       {user.avatar_url ? (
         <img src={user.avatar_url} alt={user.display_name}
-          className={`${sz} rounded-full object-cover`}
-          style={{ width: px, height: px }} />
+          className="rounded-full object-cover w-full h-full" />
       ) : (
-        <div className={`${sz} rounded-full flex items-center justify-center text-white font-semibold`}
-          style={{ background: user.avatar_color }}>
+        <div className="rounded-full flex items-center justify-center text-white font-semibold w-full h-full"
+          style={{ background: user.avatar_color, fontSize: size * 0.35 }}>
           {user.avatar_initials || user.display_name?.slice(0, 2).toUpperCase()}
         </div>
       )}
@@ -471,144 +392,338 @@ function Avatar({ user, size = 11, dot = true }: { user: User; size?: number; do
   );
 }
 
-// ─── Stellar Badge ────────────────────────────────────────────────────────────
-function StellarBadge({ size = "sm" }: { size?: "sm" | "lg" }) {
+// ─── Subscription badges ───────────────────────────────────────────────────────
+function Badge({ plan, size = "sm" }: { plan: "standard" | "premium"; size?: "sm" | "lg" }) {
+  const isPremium = plan === "premium";
+  const gradient = isPremium
+    ? "linear-gradient(135deg, #6366f1, #a855f7, #ec4899)"
+    : "linear-gradient(135deg, #0ea5e9, #06b6d4)";
+  const label = isPremium ? "⭐ PREMIUM" : "✦ STANDARD";
   if (size === "lg") {
     return (
-      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-white text-xs font-bold"
-        style={{ background: "linear-gradient(135deg, #6366f1, #a855f7, #ec4899)" }}>
-        ⭐ STELLAR
-      </div>
+      <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-white text-xs font-bold"
+        style={{ background: gradient }}>{label}</div>
     );
   }
   return (
-    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-white text-[10px] font-bold"
-      style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
-      ⭐
-    </span>
+    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-white text-[10px] font-bold"
+      style={{ background: gradient }}>{label}</span>
   );
 }
 
 // ─── Reply Preview ────────────────────────────────────────────────────────────
 function ReplyPreview({ msg }: { msg: Message }) {
   return (
-    <div className="border-l-2 border-white/50 pl-2 mb-1.5 opacity-80">
-      <p className="text-[11px] truncate max-w-[180px]">{msg.text || "[медиа]"}</p>
+    <div className="border-l-2 border-white/60 pl-2 mb-1.5 opacity-90">
+      <p className="text-[11px] truncate max-w-[200px]">{msg.text || "[медиа]"}</p>
     </div>
   );
 }
 
 // ─── Message Bubble ───────────────────────────────────────────────────────────
 function MessageBubble({ msg, allMessages }: { msg: Message; allMessages: Message[] }) {
-  const replyMsg = msg.reply_to_id ? allMessages.find((m) => m.id === msg.reply_to_id) : null;
-  const inner = () => {
-    if (msg.msg_type === "image" && msg.media_url) {
-      return (
+  const reply = msg.reply_to_id ? allMessages.find(m => m.id === msg.reply_to_id) : null;
+  const renderContent = () => {
+    if (msg.msg_type === "image" && msg.media_url) return (
+      <div>{reply && <ReplyPreview msg={reply} />}
+        <img src={msg.media_url} alt="фото" className="max-w-xs rounded-xl cursor-pointer"
+          onClick={() => window.open(msg.media_url, "_blank")} />
+        {msg.text && <p className="text-sm mt-1">{msg.text}</p>}
+      </div>
+    );
+    if (msg.msg_type === "video" && msg.media_url) return (
+      <div>{reply && <ReplyPreview msg={reply} />}
+        <video src={msg.media_url} controls className="max-w-xs rounded-xl" />
+        {msg.text && <p className="text-sm mt-1">{msg.text}</p>}
+      </div>
+    );
+    if (msg.msg_type === "audio" && msg.media_url) return (
+      <div className="flex items-center gap-2 min-w-[200px]">
+        <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
+          <Icon name="Music" size={18} className="text-primary" />
+        </div>
+        <div className="flex-1">
+          <p className="text-sm font-medium truncate max-w-[140px]">{msg.media_name || "Аудио"}</p>
+          <audio src={msg.media_url} controls className="w-full h-7 mt-0.5" />
+        </div>
+      </div>
+    );
+    if (msg.msg_type === "document" && msg.media_url) return (
+      <a href={msg.media_url} target="_blank" rel="noreferrer"
+        className="flex items-center gap-2 hover:opacity-80">
+        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+          <Icon name="FileText" size={20} className="text-primary" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium truncate max-w-[160px]">{msg.media_name || "Документ"}</p>
+          <p className="text-xs opacity-70">{msg.media_size ? formatBytes(msg.media_size) : "Файл"}</p>
+        </div>
+        <Icon name="Download" size={15} className="ml-auto opacity-60 shrink-0" />
+      </a>
+    );
+    if (msg.msg_type === "geo" && msg.geo_lat !== undefined) return (
+      <a href={`https://maps.google.com/?q=${msg.geo_lat},${msg.geo_lon}`} target="_blank" rel="noreferrer"
+        className="flex items-center gap-2 hover:opacity-80">
+        <div className="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center shrink-0">
+          <Icon name="MapPin" size={20} className="text-green-600" />
+        </div>
         <div>
-          {replyMsg && <ReplyPreview msg={replyMsg} />}
-          <img src={msg.media_url} alt="фото" className="max-w-xs rounded-xl cursor-pointer"
-            onClick={() => window.open(msg.media_url, "_blank")} />
-          {msg.text && <p className="text-sm mt-1 leading-relaxed">{msg.text}</p>}
+          <p className="text-sm font-medium">Геопозиция</p>
+          <p className="text-xs opacity-70">{msg.geo_lat?.toFixed(4)}, {msg.geo_lon?.toFixed(4)}</p>
         </div>
-      );
-    }
-    if (msg.msg_type === "video" && msg.media_url) {
-      return (
+      </a>
+    );
+    if (msg.msg_type === "contact") return (
+      <div className="flex items-center gap-2">
+        <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+          <Icon name="User" size={20} className="text-blue-600" />
+        </div>
         <div>
-          {replyMsg && <ReplyPreview msg={replyMsg} />}
-          <video src={msg.media_url} controls className="max-w-xs rounded-xl" />
-          {msg.text && <p className="text-sm mt-1">{msg.text}</p>}
+          <p className="text-sm font-medium">{msg.contact_name}</p>
+          <p className="text-xs opacity-70">{msg.contact_phone}</p>
         </div>
-      );
-    }
-    if (msg.msg_type === "audio" && msg.media_url) {
-      return (
-        <div className="flex items-center gap-2 min-w-[200px]">
-          <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
-            <Icon name="Music" size={18} className="text-primary" />
-          </div>
-          <div className="flex-1">
-            <p className="text-sm font-medium truncate max-w-[150px]">{msg.media_name || "Аудио"}</p>
-            <audio src={msg.media_url} controls className="w-full h-7 mt-1" />
-          </div>
-        </div>
-      );
-    }
-    if (msg.msg_type === "document" && msg.media_url) {
-      return (
-        <a href={msg.media_url} target="_blank" rel="noreferrer"
-          className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-            <Icon name="FileText" size={20} className="text-primary" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm font-medium truncate max-w-[180px]">{msg.media_name || "Документ"}</p>
-            <p className="text-xs opacity-70">{msg.media_size ? formatBytes(msg.media_size) : "Файл"}</p>
-          </div>
-          <Icon name="Download" size={16} className="ml-auto shrink-0 opacity-60" />
-        </a>
-      );
-    }
-    if (msg.msg_type === "geo" && msg.geo_lat !== undefined) {
-      return (
-        <a href={`https://maps.google.com/?q=${msg.geo_lat},${msg.geo_lon}`} target="_blank" rel="noreferrer"
-          className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-          <div className="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center shrink-0">
-            <Icon name="MapPin" size={20} className="text-green-600" />
-          </div>
-          <div>
-            <p className="text-sm font-medium">Геопозиция</p>
-            <p className="text-xs opacity-70">{msg.geo_lat?.toFixed(4)}, {msg.geo_lon?.toFixed(4)}</p>
-          </div>
-          <Icon name="ExternalLink" size={14} className="ml-auto shrink-0 opacity-60" />
-        </a>
-      );
-    }
-    if (msg.msg_type === "contact") {
-      return (
-        <div className="flex items-center gap-2">
-          <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-            <Icon name="User" size={20} className="text-blue-600" />
-          </div>
-          <div>
-            <p className="text-sm font-medium">{msg.contact_name}</p>
-            <p className="text-xs opacity-70">{msg.contact_phone}</p>
-          </div>
-        </div>
-      );
-    }
+      </div>
+    );
     return (
-      <div>
-        {replyMsg && <ReplyPreview msg={replyMsg} />}
-        <span className="text-sm leading-relaxed">{msg.text}</span>
+      <div>{reply && <ReplyPreview msg={reply} />}
+        <span className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</span>
       </div>
     );
   };
   return (
     <div>
-      {inner()}
+      {renderContent()}
       <div className={`flex items-center justify-end gap-1 mt-0.5 ${msg.out ? "text-white/70" : "text-muted-foreground"}`}>
         <span className="text-[10px]">{msg.time}</span>
-        {msg.out && (msg.status === "read"
-          ? <Icon name="CheckCheck" size={12} />
-          : <Icon name="Check" size={12} />)}
+        {msg.out && <Icon name={msg.status === "read" ? "CheckCheck" : "Check"} size={12} />}
+      </div>
+    </div>
+  );
+}
+
+// ─── Incoming Call Modal ──────────────────────────────────────────────────────
+function IncomingCallModal({ call, onAnswer, onReject }: {
+  call: CallSession;
+  onAnswer: (type: "audio" | "video") => void;
+  onReject: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+      <div className="bg-card rounded-3xl shadow-2xl p-6 w-72 text-center animate-pop">
+        <p className="text-xs text-muted-foreground mb-3 font-medium uppercase tracking-wider">
+          {call.call_type === "video" ? "Входящий видеозвонок" : "Входящий звонок"}
+        </p>
+        <Avatar user={call.caller} size={72} dot={false} />
+        <p className="font-bold text-lg mt-3 mb-1">{call.caller.display_name}</p>
+        <p className="text-sm text-muted-foreground mb-6">Вас вызывают...</p>
+        <div className="flex justify-center gap-6">
+          <button onClick={onReject}
+            className="w-14 h-14 rounded-full bg-destructive flex items-center justify-center shadow-lg hover:bg-destructive/90 transition-all">
+            <Icon name="PhoneOff" size={24} className="text-white" />
+          </button>
+          <button onClick={() => onAnswer(call.call_type)}
+            className="w-14 h-14 rounded-full bg-green-500 flex items-center justify-center shadow-lg hover:bg-green-600 transition-all">
+            <Icon name={call.call_type === "video" ? "Video" : "Phone"} size={24} className="text-white" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Active Call Screen ───────────────────────────────────────────────────────
+function CallScreen({ partner, callType, roomId, isCallee, onEnd }: {
+  partner: User;
+  callType: "audio" | "video";
+  roomId: string;
+  isCallee: boolean;
+  onEnd: () => void;
+}) {
+  const [duration, setDuration] = useState(0);
+  const [status, setStatus] = useState(isCallee ? "Подключение..." : "Вызов...");
+  const [micMuted, setMicMuted] = useState(false);
+  const [camOff, setCamOff] = useState(false);
+  const [speakerOff, setSpeakerOff] = useState(false);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastSigId = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+
+  const sendSignal = useCallback(async (type: string, data: unknown) => {
+    await apiFetch(CALLS_URL, {
+      method: "POST",
+      body: JSON.stringify({ action: "signal", room_id: roomId, signal_type: type, signal_data: data }),
+    });
+  }, [roomId]);
+
+  useEffect(() => {
+    let mounted = true;
+    const start = async () => {
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+        ],
+      });
+      pcRef.current = pc;
+
+      // Get local media
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: callType === "video",
+        });
+        localStreamRef.current = stream;
+        stream.getTracks().forEach(t => pc.addTrack(t, stream));
+        if (localVideoRef.current && callType === "video") {
+          localVideoRef.current.srcObject = stream;
+        }
+      } catch {
+        setStatus("Нет доступа к микрофону");
+      }
+
+      pc.ontrack = e => {
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = e.streams[0];
+          if (mounted) { setStatus("В сети"); }
+        }
+      };
+
+      pc.onicecandidate = e => {
+        if (e.candidate) sendSignal("ice", e.candidate.toJSON());
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (!mounted) return;
+        if (pc.connectionState === "connected") {
+          setStatus("В сети");
+          timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+        }
+        if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+          setStatus("Соединение прервано");
+        }
+      };
+
+      if (!isCallee) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await sendSignal("offer", { sdp: offer.sdp, type: offer.type });
+      }
+
+      // Poll signals
+      pollRef.current = setInterval(async () => {
+        if (!mounted) return;
+        const { ok, data } = await apiFetch(`${CALLS_URL}?action=signals&room=${roomId}&since_id=${lastSigId.current}`);
+        if (!ok) return;
+        const { signals, status: cs } = data;
+        if (cs === "ended") { onEnd(); return; }
+        if (cs === "active" && status === "Вызов...") setStatus("Подключение...");
+        for (const sig of (signals || [])) {
+          lastSigId.current = Math.max(lastSigId.current, sig.id);
+          if (sig.type === "offer" && isCallee) {
+            await pc.setRemoteDescription(new RTCSessionDescription(sig.data));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await sendSignal("answer", { sdp: answer.sdp, type: answer.type });
+          }
+          if (sig.type === "answer" && !isCallee) {
+            if (pc.signalingState === "have-local-offer") {
+              await pc.setRemoteDescription(new RTCSessionDescription(sig.data));
+            }
+          }
+          if (sig.type === "ice") {
+            try { await pc.addIceCandidate(new RTCIceCandidate(sig.data)); } catch { /* ignore */ }
+          }
+        }
+      }, 1500);
+    };
+    start();
+    return () => {
+      mounted = false;
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
+      pcRef.current?.close();
+      localStreamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const formatDur = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+  const toggleMic = () => {
+    localStreamRef.current?.getAudioTracks().forEach(t => { t.enabled = micMuted; });
+    setMicMuted(m => !m);
+  };
+  const toggleCam = () => {
+    localStreamRef.current?.getVideoTracks().forEach(t => { t.enabled = camOff; });
+    setCamOff(c => !c);
+  };
+  const toggleSpeaker = () => setSpeakerOff(s => !s);
+
+  const handleEnd = async () => {
+    await apiFetch(CALLS_URL, { method: "POST", body: JSON.stringify({ action: "end", room_id: roomId }) });
+    onEnd();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[150] flex flex-col bg-gradient-to-b from-gray-900 to-black">
+      {/* Remote video (full screen) */}
+      {callType === "video" && (
+        <video ref={remoteVideoRef} autoPlay playsInline
+          className="absolute inset-0 w-full h-full object-cover opacity-90" />
+      )}
+
+      {/* Overlay */}
+      <div className="absolute inset-0 bg-black/30" />
+
+      {/* Top info */}
+      <div className="relative z-10 flex flex-col items-center pt-16 gap-3">
+        <Avatar user={partner} size={88} dot={false} />
+        <p className="text-white font-bold text-2xl mt-2">{partner.display_name}</p>
+        <p className="text-white/70 text-sm">{status === "В сети" ? formatDur(duration) : status}</p>
+      </div>
+
+      {/* Local video pip */}
+      {callType === "video" && (
+        <div className="absolute top-4 right-4 z-20 w-28 h-36 rounded-2xl overflow-hidden shadow-xl border-2 border-white/20">
+          <video ref={localVideoRef} autoPlay playsInline muted
+            className="w-full h-full object-cover" style={{ transform: "scaleX(-1)" }} />
+        </div>
+      )}
+
+      {/* Controls */}
+      <div className="absolute bottom-12 left-0 right-0 z-10 flex justify-center gap-5">
+        <button onClick={toggleMic}
+          className={`w-14 h-14 rounded-full flex items-center justify-center transition-all shadow-lg
+            ${micMuted ? "bg-white/20 ring-2 ring-red-400" : "bg-white/15 hover:bg-white/25"}`}>
+          <Icon name={micMuted ? "MicOff" : "Mic"} size={24} className="text-white" />
+        </button>
+        {callType === "video" && (
+          <button onClick={toggleCam}
+            className={`w-14 h-14 rounded-full flex items-center justify-center transition-all shadow-lg
+              ${camOff ? "bg-white/20 ring-2 ring-red-400" : "bg-white/15 hover:bg-white/25"}`}>
+            <Icon name={camOff ? "VideoOff" : "Video"} size={24} className="text-white" />
+          </button>
+        )}
+        <button onClick={handleEnd}
+          className="w-16 h-16 rounded-full bg-destructive flex items-center justify-center shadow-xl hover:bg-destructive/90 transition-all">
+          <Icon name="PhoneOff" size={28} className="text-white" />
+        </button>
+        <button onClick={toggleSpeaker}
+          className={`w-14 h-14 rounded-full flex items-center justify-center transition-all shadow-lg
+            ${speakerOff ? "bg-white/20 ring-2 ring-red-400" : "bg-white/15 hover:bg-white/25"}`}>
+          <Icon name={speakerOff ? "VolumeX" : "Volume2"} size={24} className="text-white" />
+        </button>
       </div>
     </div>
   );
 }
 
 // ─── Settings Screen ──────────────────────────────────────────────────────────
-function SettingsScreen({
-  user,
-  settings,
-  onSettings,
-  onLogout,
-  onAvatarUpload,
-  avatarUploading,
-  avatarInputRef,
-}: {
-  user: User;
-  settings: AppSettings;
+function SettingsScreen({ user, settings, onSettings, onLogout, onAvatarUpload, avatarUploading, avatarInputRef }: {
+  user: User; settings: AppSettings;
   onSettings: (s: AppSettings) => void;
   onLogout: () => void;
   onAvatarUpload: (f: File) => void;
@@ -616,30 +731,22 @@ function SettingsScreen({
   avatarInputRef: React.RefObject<HTMLInputElement>;
 }) {
   const [tab, setTab] = useState<"profile" | "appearance" | "notifications" | "devices" | "language">("profile");
-  const [devices] = useState<DeviceInfo[]>([
-    {
-      name: `${detectOS()} · ${detectBrowser()}`,
-      os: detectOS(),
-      browser: detectBrowser(),
-      ip: "—",
-      lastSeen: "Сейчас",
-      current: true,
-    },
-    {
-      name: "iPhone 15 · Safari",
-      os: "iOS",
-      browser: "Safari",
-      ip: "—",
-      lastSeen: "2 дня назад",
-      current: false,
-    },
-  ]);
+  const set = (p: Partial<AppSettings>) => onSettings({ ...settings, ...p });
 
-  const set = (patch: Partial<AppSettings>) => {
-    const next = { ...settings, ...patch };
-    onSettings(next);
-  };
-
+  const accentColors = [
+    { value: "blue" as Accent, color: "#1d6cc8", label: "Синий" },
+    { value: "green" as Accent, color: "#22b865", label: "Зелёный" },
+    { value: "purple" as Accent, color: "#8b5cf6", label: "Фиолетовый" },
+    { value: "red" as Accent, color: "#ef4444", label: "Красный" },
+    { value: "orange" as Accent, color: "#f97316", label: "Оранжевый" },
+    { value: "pink" as Accent, color: "#ec4899", label: "Розовый" },
+  ];
+  const wallpapers = [
+    { value: "plain" as Wallpaper, label: "Чистый", cls: "bg-muted" },
+    { value: "dots" as Wallpaper, label: "Точки", cls: "chat-bg-dots" },
+    { value: "grid" as Wallpaper, label: "Сетка", cls: "chat-bg-grid" },
+    { value: "bubbles" as Wallpaper, label: "Пузыри", cls: "chat-bg-bubbles" },
+  ];
   const tabs = [
     { id: "profile", icon: "User", label: "Профиль" },
     { id: "appearance", icon: "Palette", label: "Оформление" },
@@ -647,65 +754,49 @@ function SettingsScreen({
     { id: "devices", icon: "Monitor", label: "Устройства" },
     { id: "language", icon: "Globe", label: "Язык" },
   ] as const;
-
-  const accentColors: { value: Accent; color: string; label: string }[] = [
-    { value: "blue", color: "#1d6cc8", label: "Синий" },
-    { value: "green", color: "#22b865", label: "Зелёный" },
-    { value: "purple", color: "#8b5cf6", label: "Фиолетовый" },
-    { value: "red", color: "#ef4444", label: "Красный" },
-    { value: "orange", color: "#f97316", label: "Оранжевый" },
-    { value: "pink", color: "#ec4899", label: "Розовый" },
-  ];
-
-  const wallpapers: { value: Wallpaper; label: string; preview: string }[] = [
-    { value: "plain", label: "Чистый", preview: "bg-muted" },
-    { value: "dots", label: "Точки", preview: "chat-bg-dots" },
-    { value: "grid", label: "Сетка", preview: "chat-bg-grid" },
-    { value: "bubbles", label: "Пузыри", preview: "chat-bg-bubbles" },
+  const devices: DeviceInfo[] = [
+    { name: `${detectOS()} · ${detectBrowser()}`, os: detectOS(), browser: detectBrowser(), current: true },
+    { name: "iPhone 15 · Safari", os: "iOS", browser: "Safari", current: false },
   ];
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="flex overflow-x-auto gap-1 px-3 py-2 border-b border-border shrink-0 scrollbar-none">
-        {tabs.map((t) => (
+        {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium whitespace-nowrap transition-all
               ${tab === t.id ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted"}`}>
-            <Icon name={t.icon} size={13} />
-            {t.label}
+            <Icon name={t.icon} size={13} />{t.label}
           </button>
         ))}
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {/* PROFILE */}
         {tab === "profile" && (
           <div className="space-y-3 animate-fade-in">
             <div className="flex flex-col items-center gap-3 py-4">
               <div className="relative">
-                <Avatar user={user} size={11} dot={false} />
-                <button
-                  onClick={() => avatarInputRef.current?.click()}
-                  disabled={avatarUploading}
-                  className="absolute -bottom-1 -right-1 w-7 h-7 bg-primary text-white rounded-full flex items-center justify-center shadow-lg hover:bg-primary/90 transition-colors">
+                <Avatar user={user} size={72} dot={false} />
+                <button onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading}
+                  className="absolute -bottom-1 -right-1 w-7 h-7 bg-primary text-white rounded-full flex items-center justify-center shadow-lg">
                   {avatarUploading
                     ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
                     : <Icon name="Camera" size={12} />}
                 </button>
                 <input ref={avatarInputRef} type="file" accept="image/*" className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) onAvatarUpload(f); }} />
+                  onChange={e => { const f = e.target.files?.[0]; if (f) onAvatarUpload(f); }} />
               </div>
               <div className="text-center">
                 <div className="font-semibold text-foreground">{user.display_name}</div>
-                <div className="text-sm text-muted-foreground">{formatPhone(user.username) || `+${user.username}`}</div>
+                <div className="text-sm text-muted-foreground">{formatPhone(user.username)}</div>
               </div>
             </div>
             <div className="bg-card rounded-2xl border border-border divide-y divide-border">
               {[
                 { icon: "User", label: "Имя", value: user.display_name },
-                { icon: "Phone", label: "Телефон", value: formatPhone(user.username) || user.username },
+                { icon: "Phone", label: "Телефон", value: formatPhone(user.username) },
                 { icon: "Shield", label: "Шифрование", value: "AES-512 E2E" },
-              ].map((row) => (
+              ].map(row => (
                 <div key={row.label} className="flex items-center gap-3 px-4 py-3">
                   <div className="w-8 h-8 rounded-xl bg-muted flex items-center justify-center shrink-0">
                     <Icon name={row.icon} size={15} className="text-muted-foreground" />
@@ -718,25 +809,18 @@ function SettingsScreen({
               ))}
             </div>
             <button onClick={onLogout}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl bg-destructive/10 hover:bg-destructive/15 transition-colors text-destructive text-sm font-medium">
-              <Icon name="LogOut" size={16} />
-              Выйти из аккаунта
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl bg-destructive/10 hover:bg-destructive/15 text-destructive text-sm font-medium">
+              <Icon name="LogOut" size={16} />Выйти из аккаунта
             </button>
           </div>
         )}
 
-        {/* APPEARANCE */}
         {tab === "appearance" && (
           <div className="space-y-4 animate-fade-in">
-            {/* Theme */}
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Тема</p>
               <div className="grid grid-cols-3 gap-2">
-                {([
-                  { value: "light", icon: "Sun", label: "Светлая" },
-                  { value: "dark", icon: "Moon", label: "Тёмная" },
-                  { value: "system", icon: "Monitor", label: "Системная" },
-                ] as { value: Theme; icon: string; label: string }[]).map((t) => (
+                {([{ value: "light", icon: "Sun", label: "Светлая" }, { value: "dark", icon: "Moon", label: "Тёмная" }, { value: "system", icon: "Monitor", label: "Системная" }] as { value: Theme; icon: string; label: string }[]).map(t => (
                   <button key={t.value} onClick={() => set({ theme: t.value })}
                     className={`flex flex-col items-center gap-2 py-3 rounded-2xl border-2 transition-all
                       ${settings.theme === t.value ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-muted/50"}`}>
@@ -746,14 +830,11 @@ function SettingsScreen({
                 ))}
               </div>
             </div>
-
-            {/* Accent color */}
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Цвет акцента</p>
               <div className="grid grid-cols-6 gap-2">
-                {accentColors.map((ac) => (
-                  <button key={ac.value} onClick={() => set({ accent: ac.value })}
-                    title={ac.label}
+                {accentColors.map(ac => (
+                  <button key={ac.value} onClick={() => set({ accent: ac.value })} title={ac.label}
                     className={`aspect-square rounded-2xl flex items-center justify-center border-2 transition-all
                       ${settings.accent === ac.value ? "border-foreground scale-105" : "border-transparent"}`}
                     style={{ background: ac.color }}>
@@ -762,42 +843,34 @@ function SettingsScreen({
                 ))}
               </div>
             </div>
-
-            {/* Wallpaper */}
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Фон чата</p>
               <div className="grid grid-cols-2 gap-2">
-                {wallpapers.map((w) => (
+                {wallpapers.map(w => (
                   <button key={w.value} onClick={() => set({ wallpaper: w.value })}
-                    className={`relative h-16 rounded-2xl border-2 overflow-hidden transition-all ${settings.wallpaper === w.value ? "border-primary" : "border-border"}`}>
-                    <div className={`absolute inset-0 ${w.preview}`} />
-                    <div className="absolute inset-0 flex items-end justify-start p-2">
+                    className={`relative h-16 rounded-2xl border-2 overflow-hidden transition-all
+                      ${settings.wallpaper === w.value ? "border-primary" : "border-border"}`}>
+                    <div className={`absolute inset-0 ${w.cls}`} />
+                    <div className="absolute inset-0 flex items-end p-2">
                       <span className="text-xs font-medium bg-white/80 rounded-lg px-2 py-0.5">{w.label}</span>
                     </div>
                     {settings.wallpaper === w.value && (
                       <div className="absolute top-2 right-2 w-5 h-5 bg-primary rounded-full flex items-center justify-center">
-                        <Icon name="Check" size={11} className="text-white" />
+                        <Icon name="Check" size={12} className="text-white" />
                       </div>
                     )}
                   </button>
                 ))}
               </div>
             </div>
-
-            {/* Font size */}
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Размер текста</p>
               <div className="grid grid-cols-3 gap-2">
-                {([
-                  { value: "sm", label: "Мелкий", size: "text-xs" },
-                  { value: "md", label: "Средний", size: "text-sm" },
-                  { value: "lg", label: "Крупный", size: "text-base" },
-                ] as { value: "sm" | "md" | "lg"; label: string; size: string }[]).map((f) => (
-                  <button key={f.value} onClick={() => set({ fontSize: f.value })}
-                    className={`py-3 rounded-2xl border-2 transition-all flex flex-col items-center gap-1
-                      ${settings.fontSize === f.value ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-muted/50"}`}>
-                    <span className={`${f.size} font-semibold ${settings.fontSize === f.value ? "text-primary" : "text-foreground"}`}>Аа</span>
-                    <span className="text-[10px] text-muted-foreground">{f.label}</span>
+                {([{ v: "sm", label: "Мелкий" }, { v: "md", label: "Средний" }, { v: "lg", label: "Крупный" }] as { v: "sm" | "md" | "lg"; label: string }[]).map(fs => (
+                  <button key={fs.v} onClick={() => set({ fontSize: fs.v })}
+                    className={`py-2.5 rounded-xl text-sm font-medium border-2 transition-all
+                      ${settings.fontSize === fs.v ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground hover:bg-muted/50"}`}>
+                    {fs.label}
                   </button>
                 ))}
               </div>
@@ -805,109 +878,61 @@ function SettingsScreen({
           </div>
         )}
 
-        {/* NOTIFICATIONS */}
         {tab === "notifications" && (
           <div className="space-y-3 animate-fade-in">
-            <div className="bg-card rounded-2xl border border-border divide-y divide-border">
-              {[
-                {
-                  icon: "Bell",
-                  label: "Уведомления",
-                  desc: "Показывать уведомления о новых сообщениях",
-                  key: "notifications" as keyof AppSettings,
-                },
-                {
-                  icon: "Volume2",
-                  label: "Звук",
-                  desc: "Звуковой сигнал при получении сообщения",
-                  key: "notifSound" as keyof AppSettings,
-                },
-                {
-                  icon: "Eye",
-                  label: "Предпросмотр",
-                  desc: "Показывать текст сообщения в уведомлении",
-                  key: "notifPreview" as keyof AppSettings,
-                },
-              ].map((item) => (
-                <div key={item.key} className="flex items-center gap-3 px-4 py-3.5">
-                  <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
-                    <Icon name={item.icon} size={17} className="text-muted-foreground" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">{item.label}</div>
-                    <div className="text-xs text-muted-foreground">{item.desc}</div>
-                  </div>
-                  <button
-                    onClick={() => set({ [item.key]: !settings[item.key] } as Partial<AppSettings>)}
-                    className={`relative w-11 h-6 rounded-full transition-all shrink-0 ${settings[item.key] ? "bg-primary" : "bg-muted-foreground/30"}`}>
-                    <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${settings[item.key] ? "left-5.5 translate-x-0" : "left-0.5"}`}
-                      style={{ left: settings[item.key] ? "calc(100% - 1.375rem)" : "0.125rem" }} />
-                  </button>
+            {[
+              { k: "notifications", icon: "Bell", label: "Уведомления", sub: "Показывать уведомления о сообщениях" },
+              { k: "notifSound", icon: "Volume2", label: "Звук", sub: "Воспроизводить звук при сообщении" },
+              { k: "notifPreview", icon: "Eye", label: "Предпросмотр", sub: "Показывать текст в уведомлении" },
+            ].map(item => (
+              <div key={item.k} className="flex items-center gap-3 bg-card border border-border rounded-2xl px-4 py-3">
+                <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
+                  <Icon name={item.icon} size={17} className="text-muted-foreground" />
                 </div>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground text-center px-4">
-              Для получения push-уведомлений разрешите их в настройках браузера / устройства
-            </p>
-          </div>
-        )}
-
-        {/* DEVICES */}
-        {tab === "devices" && (
-          <div className="space-y-3 animate-fade-in">
-            <p className="text-xs text-muted-foreground">Устройства, с которых выполнен вход в ваш аккаунт</p>
-            {devices.map((dev, i) => (
-              <div key={i} className={`bg-card rounded-2xl border p-4 ${dev.current ? "border-primary/40" : "border-border"}`}>
-                <div className="flex items-start gap-3">
-                  <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${dev.current ? "bg-primary/10" : "bg-muted"}`}>
-                    <Icon name={dev.os === "Android" || dev.os === "iOS" ? "Smartphone" : "Monitor"} size={20}
-                      className={dev.current ? "text-primary" : "text-muted-foreground"} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold truncate">{dev.name}</span>
-                      {dev.current && (
-                        <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium shrink-0">Текущее</span>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                      <div className="flex items-center gap-1">
-                        <Icon name="Clock" size={11} />
-                        {dev.lastSeen}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Icon name="Globe" size={11} />
-                        IP: {dev.ip}
-                      </div>
-                    </div>
-                  </div>
-                  {!dev.current && (
-                    <button className="text-xs text-destructive hover:text-destructive/80 transition-colors shrink-0 px-2 py-1 rounded-lg hover:bg-destructive/10">
-                      Завершить
-                    </button>
-                  )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">{item.label}</p>
+                  <p className="text-xs text-muted-foreground">{item.sub}</p>
                 </div>
+                <button onClick={() => set({ [item.k]: !settings[item.k as keyof AppSettings] } as Partial<AppSettings>)}
+                  className={`w-11 h-6 rounded-full transition-all relative shrink-0
+                    ${settings[item.k as keyof AppSettings] ? "bg-primary" : "bg-muted"}`}>
+                  <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all
+                    ${settings[item.k as keyof AppSettings] ? "left-5" : "left-0.5"}`} />
+                </button>
               </div>
             ))}
-            <button className="w-full py-3 rounded-2xl border-2 border-dashed border-destructive/30 text-destructive text-sm font-medium hover:bg-destructive/5 transition-colors">
-              Завершить все другие сеансы
-            </button>
           </div>
         )}
 
-        {/* LANGUAGE */}
+        {tab === "devices" && (
+          <div className="space-y-2 animate-fade-in">
+            {devices.map((d, i) => (
+              <div key={i} className="flex items-center gap-3 bg-card border border-border rounded-2xl px-4 py-3">
+                <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
+                  <Icon name={d.os === "Android" || d.os === "iOS" ? "Smartphone" : "Monitor"} size={17} className="text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{d.name}</p>
+                  <p className="text-xs text-muted-foreground">{d.current ? "Текущий сеанс" : "Последний вход: 2 дня назад"}</p>
+                </div>
+                {d.current && <span className="text-xs text-green-500 font-medium shrink-0">Активен</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
         {tab === "language" && (
           <div className="space-y-4 animate-fade-in">
             <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Язык интерфейса</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Язык</p>
               <div className="space-y-1.5">
-                {LANGUAGES.map((l) => (
+                {LANGUAGES.map(l => (
                   <button key={l.code} onClick={() => set({ language: l.code })}
                     className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all text-left
                       ${settings.language === l.code ? "bg-primary/10 border border-primary/30" : "bg-card border border-border hover:bg-muted/50"}`}>
                     <span className="text-xl">{l.flag}</span>
-                    <span className={`flex-1 text-sm font-medium ${settings.language === l.code ? "text-primary" : "text-foreground"}`}>{l.label}</span>
-                    {settings.language === l.code && <Icon name="Check" size={16} className="text-primary" />}
+                    <span className={`flex-1 text-sm font-medium ${settings.language === l.code ? "text-primary" : ""}`}>{l.label}</span>
+                    {settings.language === l.code && <Icon name="Check" size={15} className="text-primary" />}
                   </button>
                 ))}
               </div>
@@ -915,13 +940,13 @@ function SettingsScreen({
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Регион</p>
               <div className="space-y-1.5">
-                {REGIONS.map((r) => (
+                {REGIONS.map(r => (
                   <button key={r.code} onClick={() => set({ region: r.code })}
                     className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all text-left
                       ${settings.region === r.code ? "bg-primary/10 border border-primary/30" : "bg-card border border-border hover:bg-muted/50"}`}>
                     <span className="text-xl">{r.flag}</span>
-                    <span className={`flex-1 text-sm font-medium ${settings.region === r.code ? "text-primary" : "text-foreground"}`}>{r.label}</span>
-                    {settings.region === r.code && <Icon name="Check" size={16} className="text-primary" />}
+                    <span className={`flex-1 text-sm font-medium ${settings.region === r.code ? "text-primary" : ""}`}>{r.label}</span>
+                    {settings.region === r.code && <Icon name="Check" size={15} className="text-primary" />}
                   </button>
                 ))}
               </div>
@@ -934,8 +959,6 @@ function SettingsScreen({
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-type Section = "chats" | "channels" | "bots" | "contacts" | "archive" | "search" | "settings" | "profile";
-
 export default function Index() {
   const [onboardingDone, setOnboardingDone] = useState(() => !!localStorage.getItem("wc_onboarded"));
   const [user, setUser] = useState<User | null>(null);
@@ -963,11 +986,12 @@ export default function Index() {
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [deletingChat, setDeletingChat] = useState(false);
+  const [callHistory, setCallHistory] = useState<Record<string, unknown>[]>([]);
+  const [activeCall, setActiveCall] = useState<{ partner: User; type: "audio" | "video"; roomId: string; isCallee: boolean } | null>(null);
+  const [incomingCall, setIncomingCall] = useState<CallSession | null>(null);
   const [settings, setSettings] = useState<AppSettings>(() => {
-    try {
-      const s = localStorage.getItem("wc_settings");
-      return s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : DEFAULT_SETTINGS;
-    } catch { return DEFAULT_SETTINGS; }
+    try { const s = localStorage.getItem("wc_settings"); return s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : DEFAULT_SETTINGS; }
+    catch { return DEFAULT_SETTINGS; }
   });
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -976,15 +1000,12 @@ export default function Index() {
   const botEndRef = useRef<HTMLDivElement>(null);
   const chatsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const msgsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const callPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Apply settings to DOM
   useEffect(() => { applyTheme(settings); }, [settings]);
 
-  // Save settings
   const updateSettings = useCallback((s: AppSettings) => {
-    setSettings(s);
-    localStorage.setItem("wc_settings", JSON.stringify(s));
-    applyTheme(s);
+    setSettings(s); localStorage.setItem("wc_settings", JSON.stringify(s)); applyTheme(s);
   }, []);
 
   // Auth check
@@ -992,8 +1013,7 @@ export default function Index() {
     const token = getToken();
     if (!token) { setAuthChecked(true); return; }
     apiFetch(AUTH_URL).then(({ ok, data }) => {
-      if (ok) setUser(data.user);
-      else localStorage.removeItem("wc_token");
+      if (ok) setUser(data.user); else localStorage.removeItem("wc_token");
       setAuthChecked(true);
     });
   }, []);
@@ -1048,37 +1068,52 @@ export default function Index() {
 
   useEffect(() => {
     if (user && activeBotId === "worchat_bot") {
-      loadBotHistory();
-      loadSubscription();
+      loadBotHistory(); loadSubscription();
     }
   }, [user, activeBotId, loadBotHistory, loadSubscription]);
+
+  // Incoming call poll
+  useEffect(() => {
+    if (!user || !CALLS_URL) return;
+    callPollRef.current = setInterval(async () => {
+      if (activeCall) return;
+      const { ok, data } = await apiFetch(`${CALLS_URL}?action=incoming`);
+      if (ok && data.call) setIncomingCall(data.call);
+    }, 3000);
+    return () => { if (callPollRef.current) clearInterval(callPollRef.current); };
+  }, [user, activeCall]);
+
+  // Load call history
+  const loadCallHistory = useCallback(async () => {
+    if (!CALLS_URL) return;
+    const { ok, data } = await apiFetch(`${CALLS_URL}?action=history`);
+    if (ok) setCallHistory(data.history || []);
+  }, []);
+
+  useEffect(() => {
+    if (user && section === "calls") loadCallHistory();
+  }, [user, section, loadCallHistory]);
 
   const logout = async () => {
     await apiFetch(AUTH_URL, { method: "POST", body: JSON.stringify({ action: "logout" }) });
     localStorage.removeItem("wc_token");
-    setUser(null);
-    setChats([]); setContacts([]); setActiveChat(null); setMessages([]);
+    setUser(null); setChats([]); setContacts([]); setActiveChat(null); setMessages([]);
   };
 
   const openChat = (chat: ChatItem) => {
-    setActiveChat(chat);
-    setReplyTo(null);
-    setShowAttach(false);
-    setChatMenuOpen(false);
-    setMobileView("chat");
+    setActiveChat(chat); setReplyTo(null); setShowAttach(false); setChatMenuOpen(false); setMobileView("chat");
   };
 
   const startChatWithContact = async (contact: User) => {
     const { ok, data } = await apiFetch(CHATS_URL, {
-      method: "POST",
-      body: JSON.stringify({ action: "start", partner_id: contact.id }),
+      method: "POST", body: JSON.stringify({ action: "start", partner_id: contact.id }),
     });
     if (!ok) return;
     const res = await apiFetch(`${CHATS_URL}?action=chats`);
     if (res.ok) {
-      const updatedChats: ChatItem[] = res.data.chats || [];
-      setChats(updatedChats);
-      const found = updatedChats.find((c) => c.chat_id === data.chat_id);
+      const updated: ChatItem[] = res.data.chats || [];
+      setChats(updated);
+      const found = updated.find(c => c.chat_id === data.chat_id);
       if (found) { setSection("chats"); openChat(found); }
     }
   };
@@ -1087,43 +1122,29 @@ export default function Index() {
     if (!activeChat || sending) return;
     const text = input.trim();
     if (!overrides && !text) return;
-    setInput("");
-    setReplyTo(null);
-    setShowAttach(false);
-    setSending(true);
+    setInput(""); setReplyTo(null); setShowAttach(false); setSending(true);
     const payload: Record<string, unknown> = {
-      action: "send",
-      chat_id: activeChat.chat_id,
-      msg_type: "text",
-      text,
+      action: "send", chat_id: activeChat.chat_id, msg_type: "text", text,
       ...(replyTo ? { reply_to_id: replyTo.id } : {}),
-      ...overrides,
+      ...(overrides || {}),
     };
-    const { ok, data } = await apiFetch(MESSAGES_URL, { method: "POST", body: JSON.stringify(payload) });
-    if (ok) {
-      setMessages((prev) => [...prev, data.message]);
-      loadChats();
-    }
+    await apiFetch(MESSAGES_URL, { method: "POST", body: JSON.stringify(payload) });
+    await loadMessages(activeChat.chat_id);
+    await loadChats();
     setSending(false);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-  };
-
-  const handleFileUpload = async (file: File, forceType?: string) => {
+  const handleFileUpload = async (file: File, type: string) => {
     if (!activeChat) return;
-    setUploadingMedia(true);
-    setShowAttach(false);
-    const mime = file.type;
+    setShowAttach(false); setUploadingMedia(true);
     const b64 = await fileToBase64(file);
     const { ok, data } = await apiFetch(UPLOAD_URL, {
       method: "POST",
-      body: JSON.stringify({ type: "media", mime, data: b64, name: file.name }),
+      body: JSON.stringify({ type, mime: file.type, data: b64, name: file.name }),
     });
-    if (!ok) { setUploadingMedia(false); return; }
-    const msgType = forceType || data.category || "document";
-    await sendMessage({ msg_type: msgType, media_url: data.url, media_name: file.name, media_size: file.size, text: "" });
+    if (ok) {
+      await sendMessage({ msg_type: type, media_url: data.url, media_name: file.name, media_size: file.size, text: "" });
+    }
     setUploadingMedia(false);
   };
 
@@ -1131,8 +1152,7 @@ export default function Index() {
     setAvatarUploading(true);
     const b64 = await fileToBase64(file);
     const { ok, data } = await apiFetch(UPLOAD_URL, {
-      method: "POST",
-      body: JSON.stringify({ type: "avatar", mime: file.type, data: b64, name: file.name }),
+      method: "POST", body: JSON.stringify({ type: "avatar", mime: file.type, data: b64, name: file.name }),
     });
     if (ok && user) setUser({ ...user, avatar_url: data.url });
     setAvatarUploading(false);
@@ -1141,131 +1161,147 @@ export default function Index() {
   const sendGeo = () => {
     if (!activeChat) return;
     navigator.geolocation.getCurrentPosition(
-      (pos) => sendMessage({ msg_type: "geo", geo_lat: pos.coords.latitude, geo_lon: pos.coords.longitude, text: "" }),
+      pos => sendMessage({ msg_type: "geo", geo_lat: pos.coords.latitude, geo_lon: pos.coords.longitude, text: "" }),
       () => alert("Нет доступа к геолокации"),
     );
   };
 
   const deleteChat = async () => {
     if (!activeChat) return;
-    setDeletingChat(true);
-    setChatMenuOpen(false);
-    await apiFetch(MESSAGES_URL, {
-      method: "POST",
-      body: JSON.stringify({ action: "delete_chat", chat_id: activeChat.chat_id }),
-    });
-    setMessages([]);
-    setChats((prev) => prev.filter((c) => c.chat_id !== activeChat.chat_id));
-    setActiveChat(null);
-    setMobileView("list");
-    setDeletingChat(false);
+    setDeletingChat(true); setChatMenuOpen(false);
+    await apiFetch(MESSAGES_URL, { method: "POST", body: JSON.stringify({ action: "delete_chat", chat_id: activeChat.chat_id }) });
+    setMessages([]); setChats(p => p.filter(c => c.chat_id !== activeChat.chat_id));
+    setActiveChat(null); setMobileView("list"); setDeletingChat(false);
   };
 
   const clearChat = async () => {
     if (!activeChat) return;
     setChatMenuOpen(false);
-    await apiFetch(MESSAGES_URL, {
-      method: "POST",
-      body: JSON.stringify({ action: "clear_chat", chat_id: activeChat.chat_id }),
-    });
-    setMessages([]);
-    loadChats();
+    await apiFetch(MESSAGES_URL, { method: "POST", body: JSON.stringify({ action: "clear_chat", chat_id: activeChat.chat_id }) });
+    setMessages([]); loadChats();
   };
 
   const sendBotMessage = async () => {
     const text = botInput.trim();
     if (!text || botSending) return;
-    setBotInput("");
-    setBotSending(true);
-    setBotMessages((prev) => [...prev, { id: Date.now(), role: "user", text, time: new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }) }]);
+    setBotInput(""); setBotSending(true);
+    setBotMessages(prev => [...prev, {
+      id: Date.now(), role: "user" as const, text,
+      time: new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
+    }]);
     const { ok, data } = await apiFetch(BOT_URL, { method: "POST", body: JSON.stringify({ action: "send", text }) });
     if (ok) {
       const reply = data.reply;
-      setBotMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          role: "bot" as const,
-          text: reply.text,
-          extra: reply.type === "subscription_offer" ? { type: "subscription_offer", plan: reply.plan } : undefined,
-          time: new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
-        },
-      ]);
+      setBotMessages(prev => [...prev, {
+        id: Date.now() + 1, role: "bot" as const, text: reply.text,
+        extra: reply.type !== "text" ? { type: reply.type, plan: reply.plan } : undefined,
+        time: new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
+      }]);
       if (reply.type === "subscription_offer") loadSubscription();
     }
     setBotSending(false);
   };
 
-  const paySubscription = async () => {
+  const paySubscription = async (plan: string) => {
     setSubLoading(true);
-    const { ok } = await apiFetch(BOT_URL, { method: "POST", body: JSON.stringify({ action: "pay_subscription", plan: "stellar" }) });
+    const { ok } = await apiFetch(BOT_URL, { method: "POST", body: JSON.stringify({ action: "pay_subscription", plan }) });
     if (ok) { await loadSubscription(); await loadBotHistory(); }
     setSubLoading(false);
   };
 
-  const filteredChats = chats.filter((c) => c.partner.display_name.toLowerCase().includes(searchQuery.toLowerCase()));
-  const filteredContacts = contacts.filter((c) =>
+  const startCall = async (partner: User, type: "audio" | "video") => {
+    if (!CALLS_URL) return;
+    const { ok, data } = await apiFetch(CALLS_URL, {
+      method: "POST", body: JSON.stringify({ action: "initiate", callee_id: partner.id, call_type: type }),
+    });
+    if (ok) setActiveCall({ partner, type, roomId: data.room_id, isCallee: false });
+  };
+
+  const answerCall = async (call: CallSession) => {
+    if (!CALLS_URL) return;
+    await apiFetch(CALLS_URL, { method: "POST", body: JSON.stringify({ action: "answer", room_id: call.room_id }) });
+    setIncomingCall(null);
+    setActiveCall({ partner: call.caller, type: call.call_type, roomId: call.room_id, isCallee: true });
+  };
+
+  const rejectCall = async (call: CallSession) => {
+    if (!CALLS_URL) return;
+    await apiFetch(CALLS_URL, { method: "POST", body: JSON.stringify({ action: "reject", room_id: call.room_id }) });
+    setIncomingCall(null);
+  };
+
+  const filteredChats = chats.filter(c => c.partner.display_name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredContacts = contacts.filter(c =>
     c.display_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const totalUnread = chats.reduce((s, c) => s + (c.unread || 0), 0);
+  const chatBgClass = settings.wallpaper === "dots" ? "chat-bg-dots"
+    : settings.wallpaper === "grid" ? "chat-bg-grid"
+    : settings.wallpaper === "bubbles" ? "chat-bg-bubbles"
+    : "chat-bg";
 
-  // chat bg class
-  const chatBgClass =
-    settings.wallpaper === "dots" ? "chat-bg-dots" :
-    settings.wallpaper === "grid" ? "chat-bg-grid" :
-    settings.wallpaper === "bubbles" ? "chat-bg-bubbles" :
-    "chat-bg";
-
-  // ── Onboarding gate
+  // Onboarding
   if (!onboardingDone) {
-    return (
-      <OnboardingScreen onDone={(lang, region) => {
-        localStorage.setItem("wc_onboarded", "1");
-        updateSettings({ ...settings, language: lang, region });
-        setOnboardingDone(true);
-      }} />
-    );
+    return <OnboardingScreen onDone={(lang, region) => {
+      localStorage.setItem("wc_onboarded", "1");
+      updateSettings({ ...settings, language: lang, region });
+      setOnboardingDone(true);
+    }} />;
   }
-
   if (!authChecked) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
+    return <div className="min-h-screen flex items-center justify-center">
+      <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+    </div>;
   }
-
   if (!user) return <AuthScreen onAuth={setUser} />;
 
   const navItems: { id: Section; icon: string; label: string }[] = [
     { id: "chats", icon: "MessageSquare", label: "Чаты" },
     { id: "channels", icon: "Rss", label: "Каналы" },
     { id: "bots", icon: "Bot", label: "Боты" },
+    { id: "calls", icon: "Phone", label: "Звонки" },
     { id: "contacts", icon: "Users", label: "Контакты" },
     { id: "search", icon: "Search", label: "Поиск" },
     { id: "settings", icon: "Settings", label: "Настройки" },
   ];
 
-  const totalUnread = chats.reduce((s, c) => s + (c.unread || 0), 0);
-
   return (
     <div className="h-screen flex overflow-hidden bg-background">
-      {/* Sidebar nav */}
+      {/* Incoming call */}
+      {incomingCall && !activeCall && (
+        <IncomingCallModal call={incomingCall}
+          onAnswer={answerCall.bind(null, incomingCall)}
+          onReject={() => rejectCall(incomingCall)} />
+      )}
+
+      {/* Active call */}
+      {activeCall && (
+        <CallScreen
+          partner={activeCall.partner}
+          callType={activeCall.type}
+          roomId={activeCall.roomId}
+          isCallee={activeCall.isCallee}
+          onEnd={() => { setActiveCall(null); loadCallHistory(); }}
+        />
+      )}
+
+      {/* ── Desktop sidebar ── */}
       <div className="w-16 flex-col items-center py-3 gap-1 border-r border-border bg-card shrink-0 hidden md:flex">
-        <button onClick={() => setSection("profile")}
-          title="Профиль"
-          className={`w-11 h-11 rounded-2xl overflow-hidden transition-all mb-1 ${section === "profile" ? "ring-2 ring-primary" : "hover:ring-2 hover:ring-muted-foreground/30"}`}>
-          {user.avatar_url ? (
-            <img src={user.avatar_url} alt={user.display_name} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-white text-sm font-semibold"
-              style={{ background: user.avatar_color }}>
-              {user.avatar_initials || user.display_name.slice(0, 2).toUpperCase()}
-            </div>
-          )}
+        <button onClick={() => setSection("profile")} title="Профиль"
+          className={`w-11 h-11 rounded-2xl overflow-hidden transition-all mb-1 shrink-0
+            ${section === "profile" ? "ring-2 ring-primary" : "hover:ring-2 hover:ring-muted-foreground/30"}`}>
+          {user.avatar_url
+            ? <img src={user.avatar_url} alt="" className="w-full h-full object-cover" />
+            : <div className="w-full h-full flex items-center justify-center text-white text-sm font-semibold"
+                style={{ background: user.avatar_color }}>
+                {user.avatar_initials || user.display_name.slice(0, 2).toUpperCase()}
+              </div>
+          }
         </button>
-        {navItems.map((item) => (
-          <button key={item.id} onClick={() => { setSection(item.id); if (item.id !== "chats") { setActiveChat(null); setMobileView("list"); } }}
+        {navItems.map(item => (
+          <button key={item.id}
+            onClick={() => { setSection(item.id); if (item.id !== "chats") { setActiveChat(null); setMobileView("list"); } }}
             title={item.label}
             className={`relative w-11 h-11 flex items-center justify-center rounded-2xl transition-all
               ${section === item.id ? "bg-primary text-white shadow-md shadow-primary/20" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
@@ -1279,39 +1315,45 @@ export default function Index() {
         ))}
       </div>
 
-      {/* Left panel */}
+      {/* ── Left panel ── */}
       <div className={`w-full md:w-80 flex flex-col border-r border-border bg-card shrink-0
         ${mobileView === "chat" && activeChat ? "hidden md:flex" : "flex"}`}>
 
         {/* Header */}
         <div className="h-14 px-4 flex items-center justify-between border-b border-border shrink-0">
-          <h2 className="text-base font-bold text-foreground">
-            {navItems.find((n) => n.id === section)?.label || "WorChat"}
-          </h2>
-          {section === "chats" && (
-            <button onClick={() => setSection("contacts")}
-              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-muted transition-colors">
-              <Icon name="PenSquare" size={17} className="text-muted-foreground" />
-            </button>
-          )}
-          {section === "search" && (
-            <div className="flex-1 ml-3">
-              <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Поиск..." autoFocus
-                className="w-full px-3 py-1.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+          {/* Mobile: avatar top-left */}
+          <button className="md:hidden mr-2" onClick={() => setSection("profile")}>
+            <div className="w-8 h-8 rounded-full overflow-hidden">
+              {user.avatar_url
+                ? <img src={user.avatar_url} alt="" className="w-full h-full object-cover" />
+                : <div className="w-full h-full flex items-center justify-center text-white text-xs font-semibold"
+                    style={{ background: user.avatar_color }}>
+                    {user.avatar_initials || user.display_name.slice(0, 2).toUpperCase()}
+                  </div>
+              }
             </div>
-          )}
+          </button>
+          <h2 className="text-base font-bold text-foreground">
+            {section === "profile" ? "Профиль" : navItems.find(n => n.id === section)?.label || "WorChat"}
+          </h2>
+          <div className="flex items-center gap-1">
+            {section === "chats" && (
+              <button onClick={() => setSection("contacts")}
+                className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-muted transition-colors">
+                <Icon name="PenSquare" size={17} className="text-muted-foreground" />
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Mobile nav */}
+        {/* Mobile tab bar */}
         <div className="flex md:hidden overflow-x-auto gap-1 px-3 py-2 border-b border-border scrollbar-none shrink-0">
-          {navItems.map((item) => (
+          {navItems.map(item => (
             <button key={item.id}
               onClick={() => { setSection(item.id); if (item.id !== "chats") { setActiveChat(null); setMobileView("list"); } }}
               className={`relative flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium whitespace-nowrap transition-all shrink-0
                 ${section === item.id ? "bg-primary text-white" : "text-muted-foreground bg-muted/50"}`}>
-              <Icon name={item.icon} size={13} />
-              {item.label}
+              <Icon name={item.icon} size={13} />{item.label}
               {item.id === "chats" && totalUnread > 0 && (
                 <span className="min-w-4 h-4 px-1 bg-destructive text-white text-[9px] rounded-full flex items-center justify-center font-bold">
                   {totalUnread}
@@ -1321,30 +1363,26 @@ export default function Index() {
           ))}
         </div>
 
-        {/* Search bar in chats */}
+        {/* Search bar */}
         {section === "chats" && (
           <div className="px-4 py-2 shrink-0">
             <div className="relative">
               <Icon name="Search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+              <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Поиск чатов..."
-                className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 transition-all" />
+                className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
             </div>
           </div>
         )}
 
+        {/* Panel content */}
         <div className="flex-1 overflow-y-auto">
+
           {/* SETTINGS */}
           {section === "settings" && (
-            <SettingsScreen
-              user={user}
-              settings={settings}
-              onSettings={updateSettings}
-              onLogout={logout}
-              onAvatarUpload={handleAvatarUpload}
-              avatarUploading={avatarUploading}
-              avatarInputRef={avatarInputRef as React.RefObject<HTMLInputElement>}
-            />
+            <SettingsScreen user={user} settings={settings} onSettings={updateSettings} onLogout={logout}
+              onAvatarUpload={handleAvatarUpload} avatarUploading={avatarUploading}
+              avatarInputRef={avatarInputRef as React.RefObject<HTMLInputElement>} />
           )}
 
           {/* PROFILE */}
@@ -1352,26 +1390,42 @@ export default function Index() {
             <div className="px-4 py-4 space-y-3 animate-fade-in">
               <div className="flex flex-col items-center gap-3 py-4">
                 <div className="relative">
-                  <Avatar user={user} size={11} dot={false} />
+                  <Avatar user={user} size={80} dot={false} />
                   <button onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading}
-                    className="absolute -bottom-1 -right-1 w-7 h-7 bg-primary text-white rounded-full flex items-center justify-center shadow-lg hover:bg-primary/90 transition-colors">
+                    className="absolute -bottom-1 -right-1 w-8 h-8 bg-primary text-white rounded-full flex items-center justify-center shadow-lg">
                     {avatarUploading
                       ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      : <Icon name="Camera" size={12} />}
+                      : <Icon name="Camera" size={14} />}
                   </button>
                   <input ref={avatarInputRef} type="file" accept="image/*" className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleAvatarUpload(f); }} />
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleAvatarUpload(f); }} />
                 </div>
                 <div className="text-center">
                   <div className="font-bold text-lg">{user.display_name}</div>
-                  <div className="text-sm text-muted-foreground">{formatPhone(user.username) || user.username}</div>
-                  {subscription && <StellarBadge size="lg" />}
+                  <div className="text-sm text-muted-foreground">{formatPhone(user.username)}</div>
+                  {subscription && <Badge plan={(subscription.plan as "standard" | "premium") || "standard"} size="lg" />}
                 </div>
               </div>
+              <div className="bg-card rounded-2xl border border-border divide-y divide-border">
+                {[
+                  { icon: "User", label: "Имя", value: user.display_name },
+                  { icon: "Phone", label: "Телефон", value: formatPhone(user.username) },
+                  { icon: "Shield", label: "Шифрование", value: "AES-512 E2E" },
+                ].map(row => (
+                  <div key={row.label} className="flex items-center gap-3 px-4 py-3">
+                    <div className="w-8 h-8 rounded-xl bg-muted flex items-center justify-center shrink-0">
+                      <Icon name={row.icon} size={15} className="text-muted-foreground" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-muted-foreground">{row.label}</div>
+                      <div className="text-sm font-medium truncate">{row.value}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
               <button onClick={logout}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl bg-destructive/10 hover:bg-destructive/15 transition-colors text-destructive text-sm font-medium mt-3">
-                <Icon name="LogOut" size={16} />
-                Выйти из аккаунта
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl bg-destructive/10 hover:bg-destructive/15 text-destructive text-sm font-medium">
+                <Icon name="LogOut" size={16} />Выйти из аккаунта
               </button>
             </div>
           )}
@@ -1389,7 +1443,7 @@ export default function Index() {
                   <Icon name="MessageSquare" size={36} className="opacity-20" />
                   <p className="text-sm">Нет чатов. Перейдите в «Контакты».</p>
                   <button onClick={() => setSection("contacts")}
-                    className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-medium hover:bg-primary/90 transition-all">
+                    className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-medium">
                     Найти собеседника
                   </button>
                 </div>
@@ -1399,7 +1453,7 @@ export default function Index() {
                   className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/60 transition-colors text-left animate-fade-in
                     ${activeChat?.chat_id === c.chat_id ? "bg-primary/[0.07] border-r-2 border-primary" : ""}`}
                   style={{ animationDelay: `${i * 25}ms` }}>
-                  <Avatar user={c.partner} />
+                  <Avatar user={c.partner} size={44} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium truncate">{c.partner.display_name}</span>
@@ -1429,19 +1483,19 @@ export default function Index() {
                   <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                 </div>
               )}
-              {(["online", "offline"] as const).map((st) => {
-                const list = filteredContacts.filter((c) => c.status === st);
-                if (list.length === 0) return null;
+              {(["online", "offline"] as const).map(st => {
+                const list = filteredContacts.filter(c => c.status === st);
+                if (!list.length) return null;
                 return (
                   <div key={st}>
                     <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mt-3 mb-1.5">
                       {st === "online" ? `Онлайн · ${list.length}` : `Не в сети · ${list.length}`}
                     </div>
-                    {list.map((c) => (
+                    {list.map(c => (
                       <button key={c.id} onClick={() => startChatWithContact(c)}
                         className={`w-full flex items-center gap-3 py-2.5 px-2 hover:bg-muted/60 rounded-xl transition-colors text-left ${st === "offline" ? "opacity-55" : ""}`}>
-                        <Avatar user={c} size={10} />
-                        <div>
+                        <Avatar user={c} size={40} />
+                        <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium">{c.display_name}</div>
                           <div className="text-xs text-muted-foreground">+{c.username}</div>
                         </div>
@@ -1459,18 +1513,18 @@ export default function Index() {
             <div className="px-4 py-2">
               <div className="relative mb-3">
                 <Icon name="Search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Имя или логин..."
+                <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Имя или номер..." autoFocus
                   className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
               </div>
               {searchQuery ? (
                 filteredContacts.length > 0 ? (
                   <>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mt-1 mb-2">Пользователи</div>
-                    {filteredContacts.map((c) => (
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Пользователи</div>
+                    {filteredContacts.map(c => (
                       <button key={c.id} onClick={() => startChatWithContact(c)}
                         className="w-full flex items-center gap-3 py-2.5 px-2 hover:bg-muted/60 rounded-xl transition-colors text-left">
-                        <Avatar user={c} size={10} />
+                        <Avatar user={c} size={40} />
                         <div>
                           <div className="text-sm font-medium">{c.display_name}</div>
                           <div className="text-xs text-muted-foreground">+{c.username}</div>
@@ -1479,22 +1533,48 @@ export default function Index() {
                     ))}
                   </>
                 ) : (
-                  <p className="text-sm text-muted-foreground py-4 text-center">Ничего не найдено</p>
+                  <div className="text-center py-8 text-muted-foreground text-sm">Ничего не найдено</div>
                 )
               ) : (
-                <div className="flex flex-col items-center justify-center h-40 gap-3 text-muted-foreground">
-                  <Icon name="Search" size={32} className="opacity-25" />
-                  <p className="text-sm">Введите имя или телефон</p>
-                </div>
+                <div className="text-center py-8 text-muted-foreground text-sm opacity-60">Введите имя для поиска</div>
               )}
             </div>
           )}
 
-          {/* ARCHIVE */}
-          {section === "archive" && (
-            <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
-              <Icon name="Archive" size={36} className="opacity-25" />
-              <p className="text-sm">Архив пуст</p>
+          {/* CALLS */}
+          {section === "calls" && (
+            <div className="px-4 py-2">
+              {callHistory.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground">
+                  <Icon name="PhoneOff" size={36} className="opacity-20" />
+                  <p className="text-sm">История звонков пуста</p>
+                </div>
+              )}
+              {callHistory.map((call: Record<string, unknown>, i) => {
+                const isOut = (call as Record<string, unknown>).outgoing as boolean;
+                const partner = (isOut ? (call as Record<string, unknown>).callee : (call as Record<string, unknown>).caller) as User;
+                const callType = (call as Record<string, unknown>).call_type as string;
+                const status = (call as Record<string, unknown>).status as string;
+                return (
+                  <div key={i} className="flex items-center gap-3 py-3 border-b border-border last:border-0">
+                    <Avatar user={partner} size={44} dot={false} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">{partner?.display_name}</div>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <Icon name={isOut ? "PhoneOutgoing" : "PhoneIncoming"} size={12}
+                          className={status === "rejected" || status === "ended" && !isOut ? "text-destructive" : "text-green-500"} />
+                        <span className="text-xs text-muted-foreground">
+                          {isOut ? "Исходящий" : "Входящий"} · {callType === "video" ? "Видео" : "Аудио"}
+                        </span>
+                      </div>
+                    </div>
+                    <button onClick={() => CALLS_URL && startCall(partner, callType as "audio" | "video")}
+                      className="w-9 h-9 rounded-xl hover:bg-muted flex items-center justify-center transition-colors">
+                      <Icon name={callType === "video" ? "Video" : "Phone"} size={17} className="text-primary" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -1506,7 +1586,7 @@ export default function Index() {
                 { name: "Технологии", sub: "Последние новости IT", members: "8.1K", icon: "Cpu", color: "#0ea5e9" },
                 { name: "Дизайн", sub: "UI/UX вдохновение", members: "5.3K", icon: "Palette", color: "#f59e0b" },
                 { name: "Крипто", sub: "Курсы и аналитика", members: "21K", icon: "TrendingUp", color: "#10b981" },
-              ].map((ch) => (
+              ].map(ch => (
                 <button key={ch.name}
                   className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left">
                   <div className="w-11 h-11 rounded-full flex items-center justify-center text-white shrink-0"
@@ -1515,25 +1595,24 @@ export default function Index() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{ch.name}</div>
-                    <div className="text-xs text-muted-foreground truncate">{ch.sub}</div>
+                    <div className="text-xs text-muted-foreground">{ch.sub}</div>
                   </div>
                   <div className="text-xs text-muted-foreground shrink-0">{ch.members}</div>
                 </button>
               ))}
               <div className="mt-3 pt-3 border-t border-border">
                 <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border hover:bg-muted/60 transition-colors text-muted-foreground text-sm">
-                  <Icon name="Plus" size={16} />
-                  Создать канал
+                  <Icon name="Plus" size={16} />Создать канал
                 </button>
               </div>
             </div>
           )}
 
-          {/* BOTS */}
+          {/* BOTS list */}
           {section === "bots" && !activeBotId && (
             <div className="px-4 py-2">
               <button onClick={() => setActiveBotId("worchat_bot")}
-                className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left mb-1">
+                className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left">
                 <div className="w-11 h-11 rounded-full flex items-center justify-center text-white shrink-0 relative"
                   style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
                   <Icon name="Bot" size={22} />
@@ -1542,23 +1621,21 @@ export default function Index() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold">WorChat Bot</span>
-                    <StellarBadge />
+                    <Badge plan="premium" />
                   </div>
-                  <div className="text-xs text-muted-foreground">Приветствие · Stellar · Помощь</div>
+                  <div className="text-xs text-muted-foreground">Подписки · Помощь · Поддержка</div>
                 </div>
                 <Icon name="ChevronRight" size={15} className="text-muted-foreground shrink-0" />
               </button>
             </div>
           )}
-
-
         </div>
       </div>
 
-      {/* Main area */}
+      {/* ── Main area ── */}
       <div className={`flex-1 flex flex-col ${mobileView === "list" && !activeChat ? "hidden md:flex" : "flex"}`}>
 
-        {/* BOT SCREEN */}
+        {/* BOT screen */}
         {section === "bots" && activeBotId === "worchat_bot" && (
           <>
             <div className="h-14 px-4 flex items-center gap-3 border-b border-border bg-card shrink-0">
@@ -1570,38 +1647,48 @@ export default function Index() {
                 style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
                 <Icon name="Bot" size={18} />
               </div>
-              <div>
+              <div className="flex-1">
                 <div className="text-sm font-semibold">WorChat Bot</div>
                 <div className="text-xs text-green-500">Онлайн</div>
               </div>
+              {subscription && <Badge plan={(subscription.plan as "standard" | "premium") || "standard"} size="sm" />}
             </div>
+
             <div className={`flex-1 overflow-y-auto px-4 py-3 space-y-3 ${chatBgClass}`}>
-              {botMessages.map((bm) => {
-                if (bm.role === "bot" && bm.extra && (bm.extra as Record<string, unknown>).type === "subscription_offer") {
+              {botMessages.length === 0 && (
+                <div className="flex justify-center py-8">
+                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+              {botMessages.map(bm => {
+                const extra = bm.extra as Record<string, unknown> | undefined;
+
+                // Subscription offer card
+                if (bm.role === "bot" && extra?.type === "subscription_offer") {
+                  const planId = extra.plan as string;
                   return (
                     <div key={bm.id} className="flex justify-start">
-                      <div className="max-w-xs bg-card border border-border rounded-2xl p-4 shadow-sm">
-                        <div className="flex items-center gap-2 mb-3">
-                          <StellarBadge size="lg" />
-                        </div>
-                        <p className="text-sm text-foreground mb-3">{bm.text}</p>
+                      <div className="max-w-xs bg-card border border-border rounded-2xl p-4 shadow-sm animate-fade-in">
+                        <p className="text-sm text-foreground mb-3 whitespace-pre-wrap leading-relaxed">{bm.text}</p>
                         {!subscription ? (
-                          <button onClick={paySubscription} disabled={subLoading}
+                          <button onClick={() => paySubscription(planId)} disabled={subLoading}
                             className="w-full py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-60"
-                            style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
-                            {subLoading ? "Оформляем..." : "Оформить за 299₽/мес"}
+                            style={{ background: planId === "premium" ? "linear-gradient(135deg,#6366f1,#a855f7,#ec4899)" : "linear-gradient(135deg,#0ea5e9,#06b6d4)" }}>
+                            {subLoading ? "Оформляем..." : planId === "premium" ? "Оформить Premium — 499₽/мес" : "Оформить Standard — 149₽/мес"}
                           </button>
                         ) : (
-                          <div className="text-center text-sm text-green-600 font-medium">✓ Stellar активна</div>
+                          <div className="text-center text-sm text-green-600 font-medium">✓ Подписка активна</div>
                         )}
+                        <div className={`text-[10px] mt-2 text-right text-muted-foreground`}>{bm.time}</div>
                       </div>
                     </div>
                   );
                 }
+
                 return (
                   <div key={bm.id} className={`flex ${bm.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-xs px-3.5 py-2.5 rounded-2xl text-sm ${bm.role === "user" ? "msg-out rounded-br-sm" : "msg-in rounded-bl-sm shadow-sm border border-border"}`}>
-                      {bm.text}
+                      <p className="whitespace-pre-wrap leading-relaxed">{bm.text}</p>
                       <div className={`text-[10px] mt-0.5 text-right ${bm.role === "user" ? "text-white/70" : "text-muted-foreground"}`}>{bm.time}</div>
                     </div>
                   </div>
@@ -1609,10 +1696,11 @@ export default function Index() {
               })}
               <div ref={botEndRef} />
             </div>
+
             <div className="px-4 py-3 bg-card border-t border-border shrink-0">
               <div className="flex items-center gap-2">
-                <input value={botInput} onChange={(e) => setBotInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") sendBotMessage(); }}
+                <input value={botInput} onChange={e => setBotInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendBotMessage(); } }}
                   placeholder="Написать боту..."
                   className="flex-1 px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
                 <button onClick={sendBotMessage} disabled={!botInput.trim() || botSending}
@@ -1627,26 +1715,30 @@ export default function Index() {
           </>
         )}
 
-        {/* CHAT SCREEN */}
+        {/* CHAT screen */}
         {activeChat && (
           <>
             <div className="h-14 px-4 flex items-center gap-3 border-b border-border bg-card shrink-0">
-              <button onClick={() => { setMobileView("list"); }}
+              <button onClick={() => setMobileView("list")}
                 className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted">
                 <Icon name="ArrowLeft" size={18} className="text-muted-foreground" />
               </button>
-              <Avatar user={activeChat.partner} size={9} />
-              <div>
-                <div className="text-sm font-semibold">{activeChat.partner.display_name}</div>
+              <Avatar user={activeChat.partner} size={36} />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold truncate">{activeChat.partner.display_name}</div>
                 <div className={`text-xs ${activeChat.partner.status === "online" ? "text-green-500" : "text-muted-foreground"}`}>
                   {activeChat.partner.status === "online" ? "В сети" : "Не в сети"}
                 </div>
               </div>
-              <div className="ml-auto flex items-center gap-1">
-                <button className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors">
+              <div className="flex items-center gap-1">
+                <button onClick={() => CALLS_URL && startCall(activeChat.partner, "audio")}
+                  className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors"
+                  title="Аудиозвонок">
                   <Icon name="Phone" size={17} className="text-muted-foreground" />
                 </button>
-                <button className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors">
+                <button onClick={() => CALLS_URL && startCall(activeChat.partner, "video")}
+                  className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors"
+                  title="Видеозвонок">
                   <Icon name="Video" size={17} className="text-muted-foreground" />
                 </button>
                 <div className="relative">
@@ -1658,13 +1750,11 @@ export default function Index() {
                     <div className="absolute right-0 top-10 w-48 bg-card border border-border rounded-2xl shadow-lg z-50 py-1 animate-pop">
                       <button onClick={clearChat}
                         className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted transition-colors text-left">
-                        <Icon name="Eraser" size={15} className="text-muted-foreground" />
-                        Очистить переписку
+                        <Icon name="Eraser" size={15} className="text-muted-foreground" />Очистить переписку
                       </button>
                       <button onClick={deleteChat} disabled={deletingChat}
-                        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-destructive/10 transition-colors text-destructive text-left">
-                        <Icon name="Trash2" size={15} />
-                        {deletingChat ? "Удаление..." : "Удалить чат"}
+                        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-destructive/10 text-destructive text-left">
+                        <Icon name="Trash2" size={15} />{deletingChat ? "Удаление..." : "Удалить чат"}
                       </button>
                     </div>
                   )}
@@ -1672,10 +1762,10 @@ export default function Index() {
               </div>
             </div>
 
-            <div className="flex justify-center py-2 shrink-0">
-              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-50 border border-green-100">
-                <Icon name="Lock" size={11} className="text-green-500" />
-                <span className="text-xs text-green-600 font-medium font-mono">Сквозное шифрование · WorChat</span>
+            <div className="flex justify-center py-1.5 shrink-0">
+              <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-green-50 border border-green-100">
+                <Icon name="Lock" size={10} className="text-green-500" />
+                <span className="text-[11px] text-green-600 font-medium">Сквозное шифрование · WorChat</span>
               </div>
             </div>
 
@@ -1692,8 +1782,7 @@ export default function Index() {
                 </div>
               )}
               {messages.map((msg, i) => (
-                <div key={msg.id}
-                  className={`flex ${msg.out ? "justify-end" : "justify-start"} animate-slide-up group`}
+                <div key={msg.id} className={`flex ${msg.out ? "justify-end" : "justify-start"} animate-slide-up group`}
                   style={{ animationDelay: `${Math.min(i, 8) * 20}ms` }}>
                   <div className="relative">
                     <div className={`max-w-xs lg:max-w-md px-3.5 py-2 rounded-2xl
@@ -1736,24 +1825,28 @@ export default function Index() {
               <div className="px-4 pb-2 bg-card border-t border-border shrink-0">
                 <div className="grid grid-cols-4 gap-2 pt-3">
                   {[
-                    { icon: "Image", label: "Фото", accept: "image/*", type: "image" },
-                    { icon: "Video", label: "Видео", accept: "video/*", type: "video" },
-                    { icon: "Music", label: "Музыка", accept: "audio/*", type: "audio" },
-                    { icon: "FileText", label: "Файл", accept: "*/*", type: "document" },
-                  ].map((item) => (
+                    { icon: "Image", label: "Фото", accept: "image/*", type: "image", color: "bg-purple-100 text-purple-600" },
+                    { icon: "Video", label: "Видео", accept: "video/*", type: "video", color: "bg-blue-100 text-blue-600" },
+                    { icon: "Music", label: "Музыка", accept: "audio/*", type: "audio", color: "bg-pink-100 text-pink-600" },
+                    { icon: "FileText", label: "Файл", accept: "*/*", type: "document", color: "bg-orange-100 text-orange-600" },
+                  ].map(item => (
                     <button key={item.label}
-                      onClick={() => { fileInputRef.current?.setAttribute("accept", item.accept); fileInputRef.current?.setAttribute("data-type", item.type); fileInputRef.current?.click(); }}
+                      onClick={() => {
+                        fileInputRef.current?.setAttribute("accept", item.accept);
+                        fileInputRef.current?.setAttribute("data-type", item.type);
+                        fileInputRef.current?.click();
+                      }}
                       className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
-                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                        <Icon name={item.icon} size={20} className="text-primary" />
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${item.color}`}>
+                        <Icon name={item.icon} size={22} />
                       </div>
                       <span className="text-xs text-muted-foreground">{item.label}</span>
                     </button>
                   ))}
                   <button onClick={sendGeo}
                     className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
-                    <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
-                      <Icon name="MapPin" size={20} className="text-green-600" />
+                    <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
+                      <Icon name="MapPin" size={22} className="text-green-600" />
                     </div>
                     <span className="text-xs text-muted-foreground">Геолокация</span>
                   </button>
@@ -1764,24 +1857,25 @@ export default function Index() {
                     setShowAttach(false);
                   }}
                     className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                      <Icon name="UserPlus" size={20} className="text-blue-600" />
+                    <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
+                      <Icon name="UserPlus" size={22} className="text-blue-600" />
                     </div>
                     <span className="text-xs text-muted-foreground">Контакт</span>
                   </button>
                   <button onClick={() => setShowAttach(false)}
                     className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
-                    <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                      <Icon name="X" size={20} className="text-muted-foreground" />
+                    <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+                      <Icon name="X" size={22} className="text-muted-foreground" />
                     </div>
                     <span className="text-xs text-muted-foreground">Закрыть</span>
                   </button>
                 </div>
                 <input ref={fileInputRef} type="file" className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    const t = fileInputRef.current?.getAttribute("data-type") || undefined;
-                    if (f) handleFileUpload(f, t);
+                  onChange={async e => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const type = fileInputRef.current?.getAttribute("data-type") || "document";
+                    await handleFileUpload(file, type);
                     e.target.value = "";
                   }} />
               </div>
@@ -1790,15 +1884,17 @@ export default function Index() {
             <div className="px-4 py-3 bg-card border-t border-border shrink-0">
               <div className="flex items-end gap-2">
                 <button onClick={() => setShowAttach(!showAttach)}
-                  className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors shrink-0
+                  className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
                     ${showAttach ? "bg-primary text-white" : "hover:bg-muted text-muted-foreground"}`}>
                   <Icon name="Paperclip" size={18} />
                 </button>
-                <textarea value={input} onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown} placeholder="Сообщение..." rows={1}
-                  className="flex-1 resize-none px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground transition-all max-h-32 overflow-auto"
+                <textarea value={input} onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                  placeholder="Написать сообщение..."
+                  rows={1}
+                  className="flex-1 px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 resize-none max-h-28 transition-all"
                   style={{ lineHeight: "1.5" }} />
-                <button className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors shrink-0">
+                <button className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-muted transition-colors shrink-0">
                   <Icon name="Smile" size={18} className="text-muted-foreground" />
                 </button>
                 <button onClick={() => sendMessage()} disabled={!input.trim() || sending}
@@ -1816,11 +1912,11 @@ export default function Index() {
         {/* Empty state */}
         {!activeChat && !(section === "bots" && activeBotId) && (
           <div className={`flex-1 flex flex-col items-center justify-center gap-4 text-center px-8 ${chatBgClass}`}>
-            <div className="w-20 h-20 rounded-2xl bg-primary/10 flex items-center justify-center">
+            <div className="w-20 h-20 rounded-3xl bg-primary/10 flex items-center justify-center">
               <Icon name="Lock" size={36} className="text-primary" />
             </div>
             <div>
-              <h3 className="text-xl font-bold text-foreground mb-1">WorChat</h3>
+              <h3 className="text-xl font-bold mb-1">WorChat</h3>
               <p className="text-sm text-muted-foreground max-w-xs">
                 Все сообщения защищены сквозным шифрованием. Выберите чат или начните новый.
               </p>
@@ -1837,10 +1933,7 @@ export default function Index() {
         )}
       </div>
 
-      {/* Click outside to close chat menu */}
-      {chatMenuOpen && (
-        <div className="fixed inset-0 z-40" onClick={() => setChatMenuOpen(false)} />
-      )}
+      {chatMenuOpen && <div className="fixed inset-0 z-40" onClick={() => setChatMenuOpen(false)} />}
     </div>
   );
 }
