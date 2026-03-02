@@ -1,7 +1,8 @@
 """
-WorChat Chats API — список чатов, контакты, создание чата.
+WorChat Chats API — список чатов, контакты, создание чата, поиск людей.
 GET  /?action=chats    — мои чаты
 GET  /?action=contacts — все пользователи
+GET  /?action=search_users&q=... — поиск по username/display_name
 POST / {action: start} — начать чат с пользователем
 """
 import json
@@ -58,6 +59,36 @@ def handler(event: dict, context) -> dict:
 
         params = event.get("queryStringParameters") or {}
         action = params.get("action", "chats")
+
+        if method == "GET" and action == "search_users":
+            q = params.get("q", "").strip()
+            if not q:
+                return ok({"users": []})
+            cur = conn.cursor()
+            like = f"%{q}%"
+            cur.execute(f"""
+                SELECT id, username, display_name, avatar_color, avatar_initials, status
+                FROM {SCHEMA}.users
+                WHERE id != %s AND (
+                    LOWER(username) LIKE LOWER(%s)
+                    OR LOWER(display_name) LIKE LOWER(%s)
+                    OR CAST(id AS TEXT) = %s
+                )
+                ORDER BY
+                    CASE WHEN LOWER(username) = LOWER(%s) THEN 0
+                         WHEN LOWER(display_name) = LOWER(%s) THEN 1
+                         ELSE 2 END,
+                    display_name
+                LIMIT 20
+            """, (user["id"], like, like, q, q, q))
+            rows = cur.fetchall()
+            cur.close()
+            users = [
+                {"id": r[0], "username": r[1], "display_name": r[2],
+                 "avatar_color": r[3], "avatar_initials": r[4], "status": r[5]}
+                for r in rows
+            ]
+            return ok({"users": users})
 
         if method == "GET" and action == "contacts":
             cur = conn.cursor()

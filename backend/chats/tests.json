@@ -20,6 +20,13 @@
       "path": "/?action=contacts",
       "expectedStatus": 401,
       "bodyMatcher": "partial"
+    },
+    {
+      "name": "Search users without token",
+      "method": "GET",
+      "path": "/?action=search_users&q=test",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
     }
   ]
 }

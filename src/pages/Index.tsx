@@ -78,7 +78,8 @@ interface DeviceInfo {
   browser: string;
   current: boolean;
 }
-type Section = "chats" | "channels" | "bots" | "contacts" | "calls" | "search" | "settings" | "profile";
+type Section = "chats" | "channels" | "bots" | "contacts" | "calls" | "settings" | "profile";
+type ChatSearchTab = "chats" | "people";
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: "light", accent: "blue", wallpaper: "plain",
@@ -970,6 +971,9 @@ export default function Index() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [chatSearchTab, setChatSearchTab] = useState<ChatSearchTab>("chats");
+  const [peopleResults, setPeopleResults] = useState<User[]>([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
   const [mobileView, setMobileView] = useState<"list" | "chat">("list");
   const [sending, setSending] = useState(false);
   const [chatsLoading, setChatsLoading] = useState(false);
@@ -1114,9 +1118,18 @@ export default function Index() {
       const updated: ChatItem[] = res.data.chats || [];
       setChats(updated);
       const found = updated.find(c => c.chat_id === data.chat_id);
-      if (found) { setSection("chats"); openChat(found); }
+      if (found) { setSection("chats"); setSearchQuery(""); openChat(found); }
     }
   };
+
+  const searchPeople = useCallback(async (query: string) => {
+    if (!query.trim()) { setPeopleResults([]); return; }
+    setPeopleLoading(true);
+    const { ok, data } = await apiFetch(`${CHATS_URL}?action=search_users&q=${encodeURIComponent(query.trim())}`);
+    if (ok) setPeopleResults(data.users || []);
+    else setPeopleResults([]);
+    setPeopleLoading(false);
+  }, []);
 
   const sendMessage = async (overrides?: Partial<Message>) => {
     if (!activeChat || sending) return;
@@ -1262,7 +1275,6 @@ export default function Index() {
     { id: "bots", icon: "Bot", label: "Боты" },
     { id: "calls", icon: "Phone", label: "Звонки" },
     { id: "contacts", icon: "Users", label: "Контакты" },
-    { id: "search", icon: "Search", label: "Поиск" },
     { id: "settings", icon: "Settings", label: "Настройки" },
   ];
 
@@ -1363,14 +1375,36 @@ export default function Index() {
           ))}
         </div>
 
-        {/* Search bar */}
+        {/* Search bar + tabs */}
         {section === "chats" && (
-          <div className="px-4 py-2 shrink-0">
-            <div className="relative">
+          <div className="px-4 pt-2 pb-0 shrink-0">
+            <div className="relative mb-2">
               <Icon name="Search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Поиск чатов..."
-                className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+              <input value={searchQuery}
+                onChange={e => {
+                  const q = e.target.value;
+                  setSearchQuery(q);
+                  if (chatSearchTab === "people") searchPeople(q);
+                }}
+                placeholder={chatSearchTab === "chats" ? "Поиск чатов..." : "ID или логин пользователя..."}
+                className="w-full pl-9 pr-8 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              {searchQuery && (
+                <button onClick={() => { setSearchQuery(""); setPeopleResults([]); }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                  <Icon name="X" size={13} />
+                </button>
+              )}
+            </div>
+            <div className="flex gap-1 mb-1">
+              {([["chats", "Чаты"], ["people", "Люди"]] as [ChatSearchTab, string][]).map(([id, label]) => (
+                <button key={id}
+                  onClick={() => { setChatSearchTab(id); setSearchQuery(""); setPeopleResults([]); }}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all
+                    ${chatSearchTab === id ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted"}`}>
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
         )}
@@ -1431,7 +1465,7 @@ export default function Index() {
           )}
 
           {/* CHATS */}
-          {section === "chats" && (
+          {section === "chats" && chatSearchTab === "chats" && (
             <div>
               {chatsLoading && chats.length === 0 && (
                 <div className="flex justify-center py-8">
@@ -1447,6 +1481,9 @@ export default function Index() {
                     Найти собеседника
                   </button>
                 </div>
+              )}
+              {searchQuery && filteredChats.length === 0 && chats.length > 0 && (
+                <div className="text-center py-8 text-muted-foreground text-sm">Чаты не найдены</div>
               )}
               {filteredChats.map((c, i) => (
                 <button key={c.chat_id} onClick={() => openChat(c)}
@@ -1470,6 +1507,37 @@ export default function Index() {
                       )}
                     </div>
                   </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* PEOPLE SEARCH */}
+          {section === "chats" && chatSearchTab === "people" && (
+            <div className="px-4 py-2">
+              {!searchQuery && (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground text-center">
+                  <Icon name="UserSearch" size={36} className="opacity-20" />
+                  <p className="text-sm">Введите ID или логин<br/>чтобы найти человека</p>
+                </div>
+              )}
+              {searchQuery && peopleLoading && (
+                <div className="flex justify-center py-8">
+                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+              {searchQuery && !peopleLoading && peopleResults.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground text-sm">Пользователи не найдены</div>
+              )}
+              {peopleResults.map(u => (
+                <button key={u.id} onClick={() => startChatWithContact(u)}
+                  className="w-full flex items-center gap-3 py-3 px-2 hover:bg-muted/60 rounded-xl transition-colors text-left">
+                  <Avatar user={u} size={44} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{u.display_name}</div>
+                    <div className="text-xs text-muted-foreground">@{u.username}</div>
+                  </div>
+                  <Icon name="MessageCircle" size={16} className="text-muted-foreground shrink-0" />
                 </button>
               ))}
             </div>
@@ -1508,38 +1576,6 @@ export default function Index() {
             </div>
           )}
 
-          {/* SEARCH */}
-          {section === "search" && (
-            <div className="px-4 py-2">
-              <div className="relative mb-3">
-                <Icon name="Search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Имя или номер..." autoFocus
-                  className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
-              </div>
-              {searchQuery ? (
-                filteredContacts.length > 0 ? (
-                  <>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Пользователи</div>
-                    {filteredContacts.map(c => (
-                      <button key={c.id} onClick={() => startChatWithContact(c)}
-                        className="w-full flex items-center gap-3 py-2.5 px-2 hover:bg-muted/60 rounded-xl transition-colors text-left">
-                        <Avatar user={c} size={40} />
-                        <div>
-                          <div className="text-sm font-medium">{c.display_name}</div>
-                          <div className="text-xs text-muted-foreground">+{c.username}</div>
-                        </div>
-                      </button>
-                    ))}
-                  </>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground text-sm">Ничего не найдено</div>
-                )
-              ) : (
-                <div className="text-center py-8 text-muted-foreground text-sm opacity-60">Введите имя для поиска</div>
-              )}
-            </div>
-          )}
 
           {/* CALLS */}
           {section === "calls" && (
