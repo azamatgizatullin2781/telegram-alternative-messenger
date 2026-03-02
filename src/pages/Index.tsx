@@ -40,6 +40,10 @@ interface Message {
   media_name?: string;
   media_size?: number;
   reply_to_id?: number;
+  edited_at?: string | null;
+  is_removed?: boolean;
+  reactions?: {emoji: string; user_id: number; display_name: string}[];
+  forwarded_from_id?: number | null;
   geo_lat?: number;
   geo_lon?: number;
   contact_name?: string;
@@ -1362,6 +1366,10 @@ export default function Index() {
   const [cardExpiry, setCardExpiry] = useState("");
   const [cardCvv, setCardCvv] = useState("");
   const [cardName, setCardName] = useState("");
+  const [typingUsers, setTypingUsers] = useState<{id: number; display_name: string}[]>([]);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [editInput, setEditInput] = useState("");
+  const [msgContextMenu, setMsgContextMenu] = useState<{msg: Message; x: number; y: number} | null>(null);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1370,6 +1378,7 @@ export default function Index() {
   const chatsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const msgsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const callPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastMsgIdRef = useRef<number>(0);
 
   useEffect(() => { applyTheme(settings); }, [settings]);
 
@@ -1409,18 +1418,52 @@ export default function Index() {
     if (user && (section === "contacts" || section === "search")) loadContacts();
   }, [user, section, loadContacts]);
 
-  const loadMessages = useCallback(async (chatId: number) => {
-    const { ok, data } = await apiFetch(`${MESSAGES_URL}?chat_id=${chatId}`);
-    if (ok) setMessages(data.messages || []);
+  const loadMessages = useCallback(async (chatId: number, afterId?: number) => {
+    const url = afterId
+      ? `${MESSAGES_URL}?chat_id=${chatId}&after=${afterId}`
+      : `${MESSAGES_URL}?chat_id=${chatId}`;
+    const { ok, data } = await apiFetch(url);
+    if (!ok) return;
+    const newMsgs: Message[] = data.messages || [];
+    if (afterId) {
+      if (newMsgs.length > 0) {
+        setMessages(prev => {
+          const existingIds = new Set(prev.map(m => m.id));
+          const fresh = newMsgs.filter(m => !existingIds.has(m.id));
+          return fresh.length > 0 ? [...prev, ...fresh] : prev;
+        });
+        lastMsgIdRef.current = newMsgs[newMsgs.length - 1].id;
+      }
+    } else {
+      setMessages(newMsgs);
+      lastMsgIdRef.current = newMsgs.length > 0 ? newMsgs[newMsgs.length - 1].id : 0;
+    }
+  }, []);
+
+  const pollTyping = useCallback(async (chatId: number) => {
+    const { ok, data } = await apiFetch(`${MESSAGES_URL}?action=typing&chat_id=${chatId}`);
+    if (ok) setTypingUsers(data.typing || []);
+  }, []);
+
+  const sendTyping = useCallback(async (chatId: number) => {
+    await apiFetch(MESSAGES_URL, { method: "POST", body: JSON.stringify({ action: "typing", chat_id: chatId }) });
   }, []);
 
   useEffect(() => {
-    if (!activeChat) return;
+    if (!activeChat) { setTypingUsers([]); return; }
+    lastMsgIdRef.current = 0;
     setMsgsLoading(true);
     loadMessages(activeChat.chat_id).finally(() => setMsgsLoading(false));
-    msgsPollRef.current = setInterval(() => loadMessages(activeChat.chat_id), 3000);
-    return () => { if (msgsPollRef.current) clearInterval(msgsPollRef.current); };
-  }, [activeChat, loadMessages]);
+    const chatId = activeChat.chat_id;
+    const pollInterval = setInterval(async () => {
+      await loadMessages(chatId, lastMsgIdRef.current || undefined);
+      await pollTyping(chatId);
+    }, 2000);
+    return () => {
+      clearInterval(pollInterval);
+      setTypingUsers([]);
+    };
+  }, [activeChat?.chat_id]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
   useEffect(() => { botEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [botMessages]);
@@ -1706,6 +1749,45 @@ export default function Index() {
       if (reply.type === "subscription_offer") loadSubscription();
     }
     setBotSending(false);
+  };
+
+  const editMessage = async (msgId: number, newText: string) => {
+    const { ok, data } = await apiFetch(MESSAGES_URL, {
+      method: "POST", body: JSON.stringify({ action: "edit", message_id: msgId, text: newText }),
+    });
+    if (ok) {
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, text: data.text, edited_at: data.edited_at } : m));
+      setEditingMessage(null); setEditInput("");
+    }
+  };
+
+  const removeMessage = async (msgId: number) => {
+    const { ok } = await apiFetch(MESSAGES_URL, {
+      method: "POST", body: JSON.stringify({ action: "remove", message_id: msgId }),
+    });
+    if (ok) {
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, is_removed: true, text: "" } : m));
+      setMsgContextMenu(null);
+    }
+  };
+
+  const reactToMessage = async (msgId: number, emoji: string) => {
+    const { ok } = await apiFetch(MESSAGES_URL, {
+      method: "POST", body: JSON.stringify({ action: "react", message_id: msgId, emoji }),
+    });
+    if (ok) {
+      setMessages(prev => prev.map(m => {
+        if (m.id !== msgId) return m;
+        const existing = m.reactions || [];
+        const myReaction = existing.find(r => r.user_id === user!.id);
+        if (myReaction && myReaction.emoji === emoji) {
+          return { ...m, reactions: existing.filter(r => r.user_id !== user!.id) };
+        }
+        const without = existing.filter(r => r.user_id !== user!.id);
+        return { ...m, reactions: [...without, { emoji, user_id: user!.id, display_name: user!.display_name }] };
+      }));
+    }
+    setMsgContextMenu(null);
   };
 
   const paySubscription = (plan: string) => {
@@ -2434,26 +2516,24 @@ export default function Index() {
         {activeChat && (
           <>
             <div className="h-14 px-4 flex items-center gap-3 border-b border-border bg-card shrink-0">
-              <button onClick={() => setMobileView("list")}
+              <button onClick={() => { setMobileView("list"); setMsgContextMenu(null); }}
                 className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted">
                 <Icon name="ArrowLeft" size={18} className="text-muted-foreground" />
               </button>
               <Avatar user={activeChat.partner} size={36} />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-semibold truncate">{activeChat.partner.display_name}</div>
-                <div className={`text-xs ${activeChat.partner.status === "online" ? "text-green-500" : "text-muted-foreground"}`}>
-                  {activeChat.partner.status === "online" ? "В сети" : "Не в сети"}
+                <div className={`text-xs transition-all ${typingUsers.length > 0 ? "text-primary" : activeChat.partner.status === "online" ? "text-green-500" : "text-muted-foreground"}`}>
+                  {typingUsers.length > 0 ? "печатает..." : activeChat.partner.status === "online" ? "В сети" : "Не в сети"}
                 </div>
               </div>
               <div className="flex items-center gap-1">
                 <button onClick={() => CALLS_URL && startCall(activeChat.partner, "audio")}
-                  className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors"
-                  title="Аудиозвонок">
+                  className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Аудиозвонок">
                   <Icon name="Phone" size={17} className="text-muted-foreground" />
                 </button>
                 <button onClick={() => CALLS_URL && startCall(activeChat.partner, "video")}
-                  className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors"
-                  title="Видеозвонок">
+                  className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Видеозвонок">
                   <Icon name="Video" size={17} className="text-muted-foreground" />
                 </button>
                 <div className="relative">
@@ -2478,13 +2558,55 @@ export default function Index() {
             </div>
 
             <div className="flex justify-center py-1.5 shrink-0">
-              <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-green-50 border border-green-100">
+              <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-green-50 border border-green-100 dark:bg-green-950/30 dark:border-green-900/50">
                 <Icon name="Lock" size={10} className="text-green-500" />
-                <span className="text-[11px] text-green-600 font-medium">Сквозное шифрование · WorChat</span>
+                <span className="text-[11px] text-green-600 dark:text-green-400 font-medium">Сквозное шифрование · WorChat</span>
               </div>
             </div>
 
-            <div className={`flex-1 overflow-y-auto px-4 py-2 space-y-1 ${chatBgClass}`}>
+            {/* Context menu overlay */}
+            {msgContextMenu && (
+              <div className="fixed inset-0 z-50" onClick={() => setMsgContextMenu(null)}>
+                <div className="absolute bg-card border border-border rounded-2xl shadow-xl py-1 min-w-44 z-50"
+                  style={{ top: Math.min(msgContextMenu.y, window.innerHeight - 220), left: Math.min(msgContextMenu.x, window.innerWidth - 180) }}
+                  onClick={e => e.stopPropagation()}>
+                  {/* Quick reactions */}
+                  <div className="flex items-center gap-1 px-3 py-2 border-b border-border">
+                    {["👍","❤️","😂","😮","😢","🔥"].map(emoji => (
+                      <button key={emoji} onClick={() => reactToMessage(msgContextMenu.msg.id, emoji)}
+                        className={`text-xl hover:scale-125 transition-transform rounded-lg p-0.5 ${
+                          msgContextMenu.msg.reactions?.find(r => r.user_id === user?.id && r.emoji === emoji) ? "bg-primary/10" : ""
+                        }`}>
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => { setReplyTo(msgContextMenu.msg); setMsgContextMenu(null); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left">
+                    <Icon name="Reply" size={14} className="text-muted-foreground" />Ответить
+                  </button>
+                  {msgContextMenu.msg.out && !msgContextMenu.msg.is_removed && msgContextMenu.msg.msg_type === "text" && (
+                    <button onClick={() => { setEditingMessage(msgContextMenu.msg); setEditInput(msgContextMenu.msg.text); setMsgContextMenu(null); }}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left">
+                      <Icon name="Pencil" size={14} className="text-muted-foreground" />Редактировать
+                    </button>
+                  )}
+                  <button onClick={() => { navigator.clipboard.writeText(msgContextMenu.msg.text); setMsgContextMenu(null); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left">
+                    <Icon name="Copy" size={14} className="text-muted-foreground" />Копировать
+                  </button>
+                  {msgContextMenu.msg.out && !msgContextMenu.msg.is_removed && (
+                    <button onClick={() => removeMessage(msgContextMenu.msg.id)}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-destructive/10 text-destructive text-left">
+                      <Icon name="Trash2" size={14} />Удалить
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className={`flex-1 overflow-y-auto px-4 py-2 space-y-0.5 ${chatBgClass}`}
+              onClick={() => { setMsgContextMenu(null); setChatMenuOpen(false); }}>
               {msgsLoading && messages.length === 0 && (
                 <div className="flex justify-center py-8">
                   <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -2496,23 +2618,77 @@ export default function Index() {
                   <p className="text-sm">Напишите первое сообщение</p>
                 </div>
               )}
-              {messages.map((msg, i) => (
-                <div key={msg.id} className={`flex ${msg.out ? "justify-end" : "justify-start"} animate-slide-up group`}
-                  style={{ animationDelay: `${Math.min(i, 8) * 20}ms` }}>
-                  <div className="relative">
-                    <div className={`max-w-xs lg:max-w-md px-3.5 py-2 rounded-2xl
-                      ${msg.out ? "msg-out rounded-br-sm" : "msg-in rounded-bl-sm shadow-sm border border-border"}`}>
-                      <MessageBubble msg={msg} allMessages={messages} />
+              {messages.map((msg, i) => {
+                const showDate = i === 0 || messages[i-1]?.time?.slice(0,2) !== msg.time?.slice(0,2);
+                const isRemoved = msg.is_removed;
+                return (
+                  <div key={msg.id}>
+                    <div className={`flex ${msg.out ? "justify-end" : "justify-start"} group`}
+                      onContextMenu={e => { e.preventDefault(); setMsgContextMenu({ msg, x: e.clientX, y: e.clientY }); }}>
+                      <div className="relative max-w-xs lg:max-w-md">
+                        <div className={`px-3.5 py-2 rounded-2xl cursor-pointer
+                          ${msg.out ? "msg-out rounded-br-sm" : "msg-in rounded-bl-sm shadow-sm border border-border"}
+                          ${isRemoved ? "opacity-50 italic" : ""}`}
+                          onClick={e => { if (window.getSelection()?.toString()) return; setMsgContextMenu({ msg, x: e.clientX, y: e.clientY }); }}>
+                          {isRemoved ? (
+                            <p className="text-sm text-muted-foreground">Сообщение удалено</p>
+                          ) : (
+                            <MessageBubble msg={msg} allMessages={messages} />
+                          )}
+                          <div className={`flex items-center justify-end gap-1 mt-0.5`}>
+                            {msg.edited_at && !isRemoved && (
+                              <span className={`text-[9px] ${msg.out ? "text-white/60" : "text-muted-foreground"}`}>ред.</span>
+                            )}
+                            <span className={`text-[10px] ${msg.out ? "text-white/70" : "text-muted-foreground"}`}>{msg.time}</span>
+                            {msg.out && !isRemoved && (
+                              <Icon name={msg.status === "read" ? "CheckCheck" : "Check"} size={12}
+                                className={msg.status === "read" ? "text-blue-300" : "text-white/60"} />
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Reactions */}
+                        {!isRemoved && msg.reactions && msg.reactions.filter(r => r.emoji && r.emoji !== '').length > 0 && (
+                          <div className={`flex flex-wrap gap-0.5 mt-0.5 ${msg.out ? "justify-end" : "justify-start"}`}>
+                            {(() => {
+                              const grouped: Record<string, number> = {};
+                              (msg.reactions || []).filter(r => r.emoji).forEach(r => { grouped[r.emoji] = (grouped[r.emoji] || 0) + 1; });
+                              return Object.entries(grouped).map(([emoji, count]) => (
+                                <button key={emoji}
+                                  onClick={() => reactToMessage(msg.id, emoji)}
+                                  className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs border transition-all
+                                    ${msg.reactions?.find(r => r.user_id === user?.id && r.emoji === emoji)
+                                      ? "bg-primary/15 border-primary/30 text-primary"
+                                      : "bg-card border-border hover:bg-muted"}`}>
+                                  <span>{emoji}</span>
+                                  {count > 1 && <span className="font-medium">{count}</span>}
+                                </button>
+                              ));
+                            })()}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <button onClick={() => setReplyTo(msg)}
-                      className={`absolute top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity
-                        w-7 h-7 flex items-center justify-center rounded-full bg-white shadow-sm border border-border
-                        ${msg.out ? "-left-9" : "-right-9"}`}>
-                      <Icon name="Reply" size={13} className="text-muted-foreground" />
-                    </button>
+                  </div>
+                );
+              })}
+
+              {/* Typing indicator */}
+              {typingUsers.length > 0 && (
+                <div className="flex justify-start">
+                  <div className="msg-in px-3.5 py-2 rounded-2xl rounded-bl-sm border border-border shadow-sm">
+                    <div className="flex items-center gap-1">
+                      <div className="flex gap-0.5">
+                        {[0,1,2].map(i => (
+                          <div key={i} className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce"
+                            style={{ animationDelay: `${i * 150}ms` }} />
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              ))}
+              )}
+
               {uploadingMedia && (
                 <div className="flex justify-end">
                   <div className="px-4 py-3 rounded-2xl msg-out flex items-center gap-2">
@@ -2524,6 +2700,7 @@ export default function Index() {
               <div ref={messagesEndRef} />
             </div>
 
+            {/* Reply preview */}
             {replyTo && (
               <div className="px-4 py-2 bg-card border-t border-border flex items-center gap-2 shrink-0">
                 <div className="flex-1 border-l-2 border-primary pl-2">
@@ -2536,6 +2713,21 @@ export default function Index() {
               </div>
             )}
 
+            {/* Edit preview */}
+            {editingMessage && (
+              <div className="px-4 py-2 bg-card border-t border-border flex items-center gap-2 shrink-0">
+                <Icon name="Pencil" size={14} className="text-primary shrink-0" />
+                <div className="flex-1 border-l-2 border-primary pl-2">
+                  <p className="text-xs text-primary font-medium">Редактирование</p>
+                  <p className="text-xs text-muted-foreground truncate">{editingMessage.text}</p>
+                </div>
+                <button onClick={() => { setEditingMessage(null); setEditInput(""); }} className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-muted">
+                  <Icon name="X" size={14} className="text-muted-foreground" />
+                </button>
+              </div>
+            )}
+
+            {/* Attachment picker */}
             {showAttach && (
               <div className="px-4 pb-2 bg-card border-t border-border shrink-0">
                 <div className="grid grid-cols-4 gap-2 pt-3">
@@ -2546,11 +2738,7 @@ export default function Index() {
                     { icon: "FileText", label: "Файл", accept: "*/*", type: "document", color: "bg-orange-100 text-orange-600" },
                   ].map(item => (
                     <button key={item.label}
-                      onClick={() => {
-                        fileInputRef.current?.setAttribute("accept", item.accept);
-                        fileInputRef.current?.setAttribute("data-type", item.type);
-                        fileInputRef.current?.click();
-                      }}
+                      onClick={() => { fileInputRef.current?.setAttribute("accept", item.accept); fileInputRef.current?.setAttribute("data-type", item.type); fileInputRef.current?.click(); }}
                       className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
                       <div className={`w-12 h-12 rounded-full flex items-center justify-center ${item.color}`}>
                         <Icon name={item.icon} size={22} />
@@ -2558,27 +2746,13 @@ export default function Index() {
                       <span className="text-xs text-muted-foreground">{item.label}</span>
                     </button>
                   ))}
-                  <button onClick={sendGeo}
-                    className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
+                  <button onClick={sendGeo} className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
                     <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
                       <Icon name="MapPin" size={22} className="text-green-600" />
                     </div>
                     <span className="text-xs text-muted-foreground">Геолокация</span>
                   </button>
-                  <button onClick={() => {
-                    const name = prompt("Имя контакта:");
-                    const phone = prompt("Телефон:");
-                    if (name && phone) sendMessage({ msg_type: "contact", contact_name: name, contact_phone: phone, text: "" });
-                    setShowAttach(false);
-                  }}
-                    className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
-                    <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
-                      <Icon name="UserPlus" size={22} className="text-blue-600" />
-                    </div>
-                    <span className="text-xs text-muted-foreground">Контакт</span>
-                  </button>
-                  <button onClick={() => setShowAttach(false)}
-                    className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
+                  <button onClick={() => setShowAttach(false)} className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
                     <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
                       <Icon name="X" size={22} className="text-muted-foreground" />
                     </div>
@@ -2596,28 +2770,47 @@ export default function Index() {
               </div>
             )}
 
+            {/* Input */}
             <div className="px-4 py-3 bg-card border-t border-border shrink-0">
               <div className="flex items-end gap-2">
-                <button onClick={() => setShowAttach(!showAttach)}
-                  className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
-                    ${showAttach ? "bg-primary text-white" : "hover:bg-muted text-muted-foreground"}`}>
-                  <Icon name="Paperclip" size={18} />
-                </button>
-                <textarea value={input} onChange={e => setInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-                  placeholder="Написать сообщение..."
+                {!editingMessage && (
+                  <button onClick={() => setShowAttach(!showAttach)}
+                    className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
+                      ${showAttach ? "bg-primary text-white" : "hover:bg-muted text-muted-foreground"}`}>
+                    <Icon name="Paperclip" size={18} />
+                  </button>
+                )}
+                <textarea
+                  value={editingMessage ? editInput : input}
+                  onChange={e => {
+                    if (editingMessage) { setEditInput(e.target.value); }
+                    else {
+                      setInput(e.target.value);
+                      if (activeChat && e.target.value) sendTyping(activeChat.chat_id);
+                    }
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (editingMessage) { editMessage(editingMessage.id, editInput); }
+                      else sendMessage();
+                    }
+                    if (e.key === "Escape" && editingMessage) { setEditingMessage(null); setEditInput(""); }
+                  }}
+                  placeholder={editingMessage ? "Редактировать сообщение..." : "Написать сообщение..."}
                   rows={1}
                   className="flex-1 px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 resize-none max-h-28 transition-all"
-                  style={{ lineHeight: "1.5" }} />
-                <button className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-muted transition-colors shrink-0">
-                  <Icon name="Smile" size={18} className="text-muted-foreground" />
-                </button>
-                <button onClick={() => sendMessage()} disabled={!input.trim() || sending}
+                  style={{ lineHeight: "1.5" }}
+                  autoFocus={!!editingMessage}
+                />
+                <button
+                  onClick={() => { if (editingMessage) { editMessage(editingMessage.id, editInput); } else sendMessage(); }}
+                  disabled={(editingMessage ? !editInput.trim() : !input.trim()) || sending}
                   className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
-                    ${input.trim() && !sending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
+                    ${(editingMessage ? editInput.trim() : input.trim()) && !sending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
                   {sending
                     ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    : <Icon name="Send" size={16} />}
+                    : <Icon name={editingMessage ? "Check" : "Send"} size={16} />}
                 </button>
               </div>
             </div>

@@ -1,0 +1,4 @@
+ALTER TABLE t_p42269837_telegram_alternative.messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+ALTER TABLE t_p42269837_telegram_alternative.messages ADD COLUMN IF NOT EXISTS is_removed BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE TABLE IF NOT EXISTS t_p42269837_telegram_alternative.message_reactions (id SERIAL PRIMARY KEY, message_id INTEGER NOT NULL, user_id INTEGER NOT NULL, emoji VARCHAR(16) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(message_id, user_id));
+CREATE TABLE IF NOT EXISTS t_p42269837_telegram_alternative.typing_status (user_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, typed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (user_id, chat_id));

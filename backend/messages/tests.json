@@ -37,6 +37,22 @@
       "body": {"action": "delete_chat", "chat_id": 1},
       "expectedStatus": 401,
       "bodyMatcher": "partial"
+    },
+    {
+      "name": "Edit message without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "edit", "message_id": 1, "text": "new"},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "React without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "react", "message_id": 1, "emoji": "👍"},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
     }
   ]
 }

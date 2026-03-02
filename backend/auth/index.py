@@ -36,7 +36,7 @@ def get_initials(name: str) -> str:
 def get_user_by_token(conn, token: str):
     cur = conn.cursor()
     cur.execute(f"""
-        SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_initials, u.status
+        SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_initials, u.status, u.avatar_url
         FROM {SCHEMA}.sessions s
         JOIN {SCHEMA}.users u ON u.id = s.user_id
         WHERE s.token = %s AND s.expires_at > NOW()
@@ -46,7 +46,7 @@ def get_user_by_token(conn, token: str):
     if not row:
         return None
     return {"id": row[0], "username": row[1], "display_name": row[2],
-            "avatar_color": row[3], "avatar_initials": row[4], "status": row[5]}
+            "avatar_color": row[3], "avatar_initials": row[4], "status": row[5], "avatar_url": row[6]}
 
 def ok(data):
     return {"statusCode": 200, "headers": CORS, "body": json.dumps(data)}

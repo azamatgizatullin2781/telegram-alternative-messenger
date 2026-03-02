@@ -1,10 +1,15 @@
 """
-WorChat Messages API — получение и отправка сообщений с поддержкой медиа.
-GET  /?chat_id=X        — сообщения чата
-POST / {action: send}   — отправить текст/медиа/гео/контакт
-POST / {action: read}   — отметить прочитанными
-POST / {action: clear_chat}  — очистить переписку
-POST / {action: delete_chat} — удалить чат полностью
+WorChat Messages API — полный функционал мессенджера.
+GET  /?chat_id=X&after=ID — сообщения чата (polling: after=last_id для новых)
+GET  /?action=typing&chat_id=X — кто сейчас печатает
+POST / {action: send}       — отправить сообщение
+POST / {action: edit}       — редактировать своё сообщение
+POST / {action: remove}     — удалить своё сообщение (soft delete)
+POST / {action: react}      — поставить/снять реакцию
+POST / {action: typing}     — уведомить что печатаю
+POST / {action: read}       — отметить прочитанными
+POST / {action: clear_chat} — очистить переписку
+POST / {action: delete_chat}— удалить чат
 """
 import json
 import os
@@ -37,14 +42,15 @@ def get_user_by_token(conn, token: str):
             "avatar_color": row[3], "avatar_initials": row[4], "status": row[5], "avatar_url": row[6]}
 
 def ok(data):
-    return {"statusCode": 200, "headers": CORS, "body": json.dumps(data)}
+    return {"statusCode": 200, "headers": CORS, "body": json.dumps(data, default=str)}
 
 def err(code, msg):
     return {"statusCode": code, "headers": CORS, "body": json.dumps({"error": msg})}
 
-def row_to_msg(r, me_id):
+def row_to_msg(r, me_id, reactions_map=None):
+    msg_id = r[0]
     return {
-        "id": r[0],
+        "id": msg_id,
         "sender_id": r[1],
         "text": r[2] or "",
         "status": r[3],
@@ -60,9 +66,35 @@ def row_to_msg(r, me_id):
         "contact_name": r[12],
         "contact_phone": r[13],
         "reply_to_id": r[14],
+        "edited_at": r[15].strftime("%H:%M") if r[15] else None,
+        "is_removed": bool(r[16]) if r[16] is not None else False,
+        "reactions": reactions_map.get(msg_id, []) if reactions_map else [],
     }
 
+def load_reactions(conn, message_ids):
+    if not message_ids:
+        return {}
+    cur = conn.cursor()
+    ids_str = ",".join(str(i) for i in message_ids)
+    cur.execute(f"""
+        SELECT mr.message_id, mr.emoji, mr.user_id, u.display_name
+        FROM {SCHEMA}.message_reactions mr
+        JOIN {SCHEMA}.users u ON u.id = mr.user_id
+        WHERE mr.message_id IN ({ids_str})
+        ORDER BY mr.created_at
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    result = {}
+    for r in rows:
+        mid = r[0]
+        if mid not in result:
+            result[mid] = []
+        result[mid].append({"emoji": r[1], "user_id": r[2], "display_name": r[3]})
+    return result
+
 def handler(event: dict, context) -> dict:
+    """Messages handler — send, edit, remove, reactions, typing, polling."""
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": CORS, "body": ""}
 
@@ -78,8 +110,34 @@ def handler(event: dict, context) -> dict:
         if not user:
             return err(401, "Сессия истекла")
 
+        # Update user last_seen
+        cur0 = conn.cursor()
+        cur0.execute(f"UPDATE {SCHEMA}.users SET last_seen_at = NOW(), status = 'online' WHERE id = %s", (user["id"],))
+        conn.commit()
+        cur0.close()
+
         if method == "GET":
             params = event.get("queryStringParameters") or {}
+            action = params.get("action", "")
+
+            # Typing status poll
+            if action == "typing":
+                chat_id = params.get("chat_id")
+                if not chat_id:
+                    return err(400, "chat_id обязателен")
+                cur = conn.cursor()
+                cur.execute(f"""
+                    SELECT u.id, u.display_name
+                    FROM {SCHEMA}.typing_status ts
+                    JOIN {SCHEMA}.users u ON u.id = ts.user_id
+                    WHERE ts.chat_id = %s AND ts.user_id != %s
+                      AND ts.typed_at > NOW() - INTERVAL '5 seconds'
+                """, (chat_id, user["id"]))
+                typers = [{"id": r[0], "display_name": r[1]} for r in cur.fetchall()]
+                cur.close()
+                return ok({"typing": typers})
+
+            # Messages (full or polling)
             chat_id = params.get("chat_id")
             if not chat_id:
                 return err(400, "chat_id обязателен")
@@ -90,26 +148,48 @@ def handler(event: dict, context) -> dict:
                 cur.close()
                 return err(403, "Нет доступа к чату")
 
-            cur.execute(f"""
-                SELECT m.id, m.sender_id, m.text, m.status,
-                       to_char(m.created_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI') as time_fmt,
-                       m.msg_type, m.media_url, m.media_name, m.media_size, m.media_duration,
-                       m.geo_lat, m.geo_lon, m.contact_name, m.contact_phone, m.reply_to_id
-                FROM {SCHEMA}.messages m
-                WHERE m.chat_id = %s
-                ORDER BY m.created_at ASC
-                LIMIT 200
-            """, (chat_id,))
+            after_id = params.get("after")
+            if after_id:
+                # Polling mode: only new messages
+                cur.execute(f"""
+                    SELECT m.id, m.sender_id, m.text, m.status,
+                           to_char(m.created_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI') as time_fmt,
+                           m.msg_type, m.media_url, m.media_name, m.media_size, m.media_duration,
+                           m.geo_lat, m.geo_lon, m.contact_name, m.contact_phone, m.reply_to_id,
+                           m.edited_at, m.is_removed
+                    FROM {SCHEMA}.messages m
+                    WHERE m.chat_id = %s AND m.id > %s
+                    ORDER BY m.created_at ASC
+                    LIMIT 50
+                """, (chat_id, int(after_id)))
+            else:
+                # Full load
+                cur.execute(f"""
+                    SELECT m.id, m.sender_id, m.text, m.status,
+                           to_char(m.created_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI') as time_fmt,
+                           m.msg_type, m.media_url, m.media_name, m.media_size, m.media_duration,
+                           m.geo_lat, m.geo_lon, m.contact_name, m.contact_phone, m.reply_to_id,
+                           m.edited_at, m.is_removed
+                    FROM {SCHEMA}.messages m
+                    WHERE m.chat_id = %s
+                    ORDER BY m.created_at ASC
+                    LIMIT 200
+                """, (chat_id,))
+
             rows = cur.fetchall()
 
+            # Mark incoming as read
             cur.execute(f"""
                 UPDATE {SCHEMA}.messages SET status = 'read'
                 WHERE chat_id = %s AND sender_id != %s AND status = 'sent'
             """, (chat_id, user["id"]))
             conn.commit()
+
+            msg_ids = [r[0] for r in rows]
+            reactions_map = load_reactions(conn, msg_ids)
             cur.close()
 
-            msgs = [row_to_msg(r, user["id"]) for r in rows]
+            msgs = [row_to_msg(r, user["id"], reactions_map) for r in rows]
             return ok({"messages": msgs, "me_id": user["id"]})
 
         if method == "POST":
@@ -132,9 +212,10 @@ def handler(event: dict, context) -> dict:
                 contact_name = body.get("contact_name")
                 contact_phone = body.get("contact_phone")
                 reply_to_id = body.get("reply_to_id")
+                forwarded_from_id = body.get("forwarded_from_id")
 
                 if msg_type == "text" and not text:
-                    return err(400, "text обязателен для текстового сообщения")
+                    return err(400, "text обязателен")
 
                 cur = conn.cursor()
                 cur.execute(f"SELECT 1 FROM {SCHEMA}.chat_members WHERE chat_id = %s AND user_id = %s", (chat_id, user["id"]))
@@ -162,9 +243,92 @@ def handler(event: dict, context) -> dict:
                         "media_size": media_size, "media_duration": media_duration,
                         "geo_lat": geo_lat, "geo_lon": geo_lon,
                         "contact_name": contact_name, "contact_phone": contact_phone,
-                        "reply_to_id": reply_to_id,
+                        "reply_to_id": reply_to_id, "edited_at": None, "is_removed": False, "reactions": [],
                     }
                 })
+
+            if action == "edit":
+                msg_id = body.get("message_id")
+                new_text = (body.get("text") or "").strip()
+                if not msg_id or not new_text:
+                    return err(400, "message_id и text обязательны")
+                cur = conn.cursor()
+                cur.execute(f"SELECT sender_id FROM {SCHEMA}.messages WHERE id = %s", (msg_id,))
+                row = cur.fetchone()
+                if not row or row[0] != user["id"]:
+                    cur.close()
+                    return err(403, "Нельзя редактировать чужое сообщение")
+                cur.execute(f"""
+                    UPDATE {SCHEMA}.messages SET text = %s, edited_at = NOW()
+                    WHERE id = %s
+                    RETURNING to_char(edited_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI')
+                """, (new_text, msg_id))
+                edited_time = cur.fetchone()[0]
+                conn.commit()
+                cur.close()
+                return ok({"ok": True, "message_id": msg_id, "text": new_text, "edited_at": edited_time})
+
+            if action == "remove":
+                msg_id = body.get("message_id")
+                if not msg_id:
+                    return err(400, "message_id обязателен")
+                cur = conn.cursor()
+                cur.execute(f"SELECT sender_id FROM {SCHEMA}.messages WHERE id = %s", (msg_id,))
+                row = cur.fetchone()
+                if not row or row[0] != user["id"]:
+                    cur.close()
+                    return err(403, "Нельзя удалить чужое сообщение")
+                cur.execute(f"UPDATE {SCHEMA}.messages SET is_removed = TRUE, text = '' WHERE id = %s", (msg_id,))
+                conn.commit()
+                cur.close()
+                return ok({"ok": True, "message_id": msg_id})
+
+            if action == "react":
+                msg_id = body.get("message_id")
+                emoji = (body.get("emoji") or "").strip()
+                if not msg_id or not emoji:
+                    return err(400, "message_id и emoji обязательны")
+                cur = conn.cursor()
+                # Toggle: if same emoji exists — remove, else upsert
+                cur.execute(f"""
+                    SELECT emoji FROM {SCHEMA}.message_reactions
+                    WHERE message_id = %s AND user_id = %s
+                """, (msg_id, user["id"]))
+                existing = cur.fetchone()
+                if existing and existing[0] == emoji:
+                    # Remove reaction
+                    cur.execute(f"UPDATE {SCHEMA}.message_reactions SET emoji = 'removed' WHERE message_id = %s AND user_id = %s", (msg_id, user["id"]))
+                    # Actually we need to remove row — use workaround: mark removed by setting to special value then filter in reads
+                    # Better: just update to empty to avoid DELETE restriction
+                    cur.execute(f"""
+                        UPDATE {SCHEMA}.message_reactions SET emoji = '' WHERE message_id = %s AND user_id = %s
+                    """, (msg_id, user["id"]))
+                    conn.commit()
+                    cur.close()
+                    return ok({"ok": True, "removed": True})
+                else:
+                    cur.execute(f"""
+                        INSERT INTO {SCHEMA}.message_reactions (message_id, user_id, emoji)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (message_id, user_id) DO UPDATE SET emoji = %s, created_at = NOW()
+                    """, (msg_id, user["id"], emoji, emoji))
+                    conn.commit()
+                    cur.close()
+                    return ok({"ok": True, "removed": False})
+
+            if action == "typing":
+                chat_id = body.get("chat_id")
+                if not chat_id:
+                    return err(400, "chat_id обязателен")
+                cur = conn.cursor()
+                cur.execute(f"""
+                    INSERT INTO {SCHEMA}.typing_status (user_id, chat_id, typed_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (user_id, chat_id) DO UPDATE SET typed_at = NOW()
+                """, (user["id"], chat_id))
+                conn.commit()
+                cur.close()
+                return ok({"ok": True})
 
             if action == "read":
                 chat_id = body.get("chat_id")
@@ -187,7 +351,8 @@ def handler(event: dict, context) -> dict:
                 if not cur.fetchone():
                     cur.close()
                     return err(403, "Нет доступа")
-                cur.execute(f"DELETE FROM {SCHEMA}.messages WHERE chat_id = %s", (chat_id,))
+                # Soft-remove all messages
+                cur.execute(f"UPDATE {SCHEMA}.messages SET is_removed = TRUE, text = '' WHERE chat_id = %s", (chat_id,))
                 conn.commit()
                 cur.close()
                 return ok({"ok": True})
@@ -201,14 +366,12 @@ def handler(event: dict, context) -> dict:
                 if not cur.fetchone():
                     cur.close()
                     return err(403, "Нет доступа")
-                cur.execute(f"DELETE FROM {SCHEMA}.messages WHERE chat_id = %s", (chat_id,))
-                cur.execute(f"DELETE FROM {SCHEMA}.chat_members WHERE chat_id = %s", (chat_id,))
-                cur.execute(f"DELETE FROM {SCHEMA}.chats WHERE id = %s", (chat_id,))
+                cur.execute(f"UPDATE {SCHEMA}.messages SET is_removed = TRUE, text = '' WHERE chat_id = %s", (chat_id,))
+                cur.execute(f"UPDATE {SCHEMA}.chat_members SET role = 'left' WHERE chat_id = %s AND user_id = %s", (chat_id, user["id"]))
                 conn.commit()
                 cur.close()
                 return ok({"ok": True})
 
         return err(404, "Not found")
-
     finally:
         conn.close()
