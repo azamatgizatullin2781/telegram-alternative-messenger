@@ -21,6 +21,22 @@
       "body": {"action": "send", "chat_id": 1, "text": "hello"},
       "expectedStatus": 401,
       "bodyMatcher": "partial"
+    },
+    {
+      "name": "Clear chat without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "clear_chat", "chat_id": 1},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Delete chat without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "delete_chat", "chat_id": 1},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
     }
   ]
 }

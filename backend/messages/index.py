@@ -1,8 +1,10 @@
 """
 WorChat Messages API — получение и отправка сообщений с поддержкой медиа.
-GET  /?chat_id=X  — сообщения чата
-POST / {action: send}  — отправить текст/медиа/гео/контакт
-POST / {action: read}  — отметить прочитанными
+GET  /?chat_id=X        — сообщения чата
+POST / {action: send}   — отправить текст/медиа/гео/контакт
+POST / {action: read}   — отметить прочитанными
+POST / {action: clear_chat}  — очистить переписку
+POST / {action: delete_chat} — удалить чат полностью
 """
 import json
 import os
@@ -174,6 +176,36 @@ def handler(event: dict, context) -> dict:
                     """, (chat_id, user["id"]))
                     conn.commit()
                     cur.close()
+                return ok({"ok": True})
+
+            if action == "clear_chat":
+                chat_id = body.get("chat_id")
+                if not chat_id:
+                    return err(400, "chat_id обязателен")
+                cur = conn.cursor()
+                cur.execute(f"SELECT 1 FROM {SCHEMA}.chat_members WHERE chat_id = %s AND user_id = %s", (chat_id, user["id"]))
+                if not cur.fetchone():
+                    cur.close()
+                    return err(403, "Нет доступа")
+                cur.execute(f"DELETE FROM {SCHEMA}.messages WHERE chat_id = %s", (chat_id,))
+                conn.commit()
+                cur.close()
+                return ok({"ok": True})
+
+            if action == "delete_chat":
+                chat_id = body.get("chat_id")
+                if not chat_id:
+                    return err(400, "chat_id обязателен")
+                cur = conn.cursor()
+                cur.execute(f"SELECT 1 FROM {SCHEMA}.chat_members WHERE chat_id = %s AND user_id = %s", (chat_id, user["id"]))
+                if not cur.fetchone():
+                    cur.close()
+                    return err(403, "Нет доступа")
+                cur.execute(f"DELETE FROM {SCHEMA}.messages WHERE chat_id = %s", (chat_id,))
+                cur.execute(f"DELETE FROM {SCHEMA}.chat_members WHERE chat_id = %s", (chat_id,))
+                cur.execute(f"DELETE FROM {SCHEMA}.chats WHERE id = %s", (chat_id,))
+                conn.commit()
+                cur.close()
                 return ok({"ok": True})
 
         return err(404, "Not found")

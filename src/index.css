@@ -47,6 +47,111 @@
     --msg-out-fg: 0 0% 100%;
     --msg-in: 0 0% 100%;
     --msg-in-fg: 220 15% 10%;
+
+    --chat-bg: 220 15% 97%;
+  }
+
+  /* Dark theme */
+  [data-theme="dark"] {
+    --background: 222 20% 10%;
+    --foreground: 210 20% 92%;
+
+    --card: 222 18% 14%;
+    --card-foreground: 210 20% 92%;
+
+    --popover: 222 18% 14%;
+    --popover-foreground: 210 20% 92%;
+
+    --primary: 215 85% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 222 16% 18%;
+    --secondary-foreground: 210 20% 85%;
+
+    --muted: 222 16% 18%;
+    --muted-foreground: 215 10% 55%;
+
+    --accent: 215 85% 55%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 4 80% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 222 14% 20%;
+    --input: 222 14% 20%;
+    --ring: 215 85% 55%;
+
+    --sidebar-background: 222 18% 12%;
+    --sidebar-foreground: 210 20% 92%;
+    --sidebar-primary: 215 85% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 16% 18%;
+    --sidebar-accent-foreground: 210 20% 85%;
+    --sidebar-border: 222 14% 20%;
+    --sidebar-ring: 215 85% 55%;
+
+    --msg-out: 215 85% 50%;
+    --msg-out-fg: 0 0% 100%;
+    --msg-in: 222 16% 20%;
+    --msg-in-fg: 210 20% 92%;
+
+    --chat-bg: 222 20% 13%;
+  }
+
+  /* Accent themes — primary color overrides */
+  [data-accent="green"] {
+    --primary: 142 70% 40%;
+    --accent: 142 70% 40%;
+    --ring: 142 70% 40%;
+    --msg-out: 142 70% 40%;
+    --sidebar-primary: 142 70% 40%;
+    --sidebar-ring: 142 70% 40%;
+  }
+  [data-accent="purple"] {
+    --primary: 262 80% 55%;
+    --accent: 262 80% 55%;
+    --ring: 262 80% 55%;
+    --msg-out: 262 80% 55%;
+    --sidebar-primary: 262 80% 55%;
+    --sidebar-ring: 262 80% 55%;
+  }
+  [data-accent="red"] {
+    --primary: 4 80% 50%;
+    --accent: 4 80% 50%;
+    --ring: 4 80% 50%;
+    --msg-out: 4 80% 50%;
+    --sidebar-primary: 4 80% 50%;
+    --sidebar-ring: 4 80% 50%;
+  }
+  [data-accent="orange"] {
+    --primary: 27 90% 52%;
+    --accent: 27 90% 52%;
+    --ring: 27 90% 52%;
+    --msg-out: 27 90% 52%;
+    --sidebar-primary: 27 90% 52%;
+    --sidebar-ring: 27 90% 52%;
+  }
+  [data-accent="pink"] {
+    --primary: 330 80% 55%;
+    --accent: 330 80% 55%;
+    --ring: 330 80% 55%;
+    --msg-out: 330 80% 55%;
+    --sidebar-primary: 330 80% 55%;
+    --sidebar-ring: 330 80% 55%;
+  }
+
+  /* Chat wallpaper themes */
+  [data-wallpaper="dots"] {
+    --chat-bg: 220 15% 97%;
+  }
+  [data-wallpaper="bubbles"] {
+    --chat-bg: 210 30% 96%;
+  }
+  [data-wallpaper="grid"] {
+    --chat-bg: 220 15% 97%;
+  }
+  [data-wallpaper="dark"] {
+    --chat-bg: 220 20% 15%;
   }
 }
 
@@ -81,6 +186,35 @@
     background: hsl(var(--msg-in));
     color: hsl(var(--msg-in-fg));
   }
+  .chat-bg {
+    background-color: hsl(var(--chat-bg));
+  }
+  .chat-bg-dots {
+    background-color: hsl(var(--chat-bg));
+    background-image: radial-gradient(hsl(var(--border)) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  .chat-bg-grid {
+    background-color: hsl(var(--chat-bg));
+    background-image:
+      linear-gradient(hsl(var(--border)) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border)) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  .chat-bg-bubbles {
+    background-color: hsl(var(--chat-bg));
+    background-image:
+      radial-gradient(
+        circle at 20% 50%,
+        hsl(var(--primary) / 0.05) 0%,
+        transparent 50%
+      ),
+      radial-gradient(
+        circle at 80% 20%,
+        hsl(var(--primary) / 0.07) 0%,
+        transparent 40%
+      );
+  }
   .font-mono-cipher {
     font-family: "IBM Plex Mono", monospace;
   }
@@ -92,6 +226,9 @@
   }
   .animate-pop {
     animation: pop 0.2s ease forwards;
+  }
+  .animate-slide-in {
+    animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
 }
 
@@ -105,7 +242,6 @@
     transform: translateY(0);
   }
 }
-
 @keyframes slideUp {
   from {
     opacity: 0;
@@ -116,7 +252,6 @@
     transform: translateY(0);
   }
 }
-
 @keyframes pop {
   0% {
     transform: scale(0.92);
@@ -125,5 +260,15 @@
   100% {
     transform: scale(1);
     opacity: 1;
+  }
+}
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }
