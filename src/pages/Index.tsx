@@ -8,6 +8,7 @@ const MESSAGES_URL = func2url.messages;
 const BOT_URL = func2url.bot;
 const UPLOAD_URL = func2url.upload;
 const CALLS_URL = (func2url as Record<string, string>).calls || "";
+const CHANNELS_URL = (func2url as Record<string, string>).channels || "";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface User {
@@ -80,6 +81,29 @@ interface DeviceInfo {
 }
 type Section = "chats" | "channels" | "bots" | "contacts" | "calls" | "settings" | "profile";
 type ChatSearchTab = "chats" | "people";
+interface Channel {
+  id: number;
+  name: string;
+  description: string;
+  avatar_color: string;
+  avatar_url?: string;
+  members_count: number;
+  is_public: boolean;
+  slug: string;
+  owner_id: number;
+  subscribed: boolean;
+  role?: string;
+}
+interface ChannelPost {
+  id: number;
+  text: string;
+  msg_type: string;
+  media_url?: string;
+  media_name?: string;
+  views: number;
+  ts: string;
+  author: { display_name: string; avatar_color: string; avatar_initials: string; avatar_url?: string };
+}
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: "light", accent: "blue", wallpaper: "plain",
@@ -959,6 +983,324 @@ function SettingsScreen({ user, settings, onSettings, onLogout, onAvatarUpload, 
   );
 }
 
+// ─── CreateChannelModal ────────────────────────────────────────────────────────
+function CreateChannelModal({ onClose, onCreate }: {
+  onClose: () => void;
+  onCreate: (name: string, desc: string, isPublic: boolean) => void;
+}) {
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [isPublic, setIsPublic] = useState(true);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="bg-card rounded-2xl border border-border w-full max-w-sm p-6 space-y-4 shadow-xl">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-bold">Новый канал</h2>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted"><Icon name="X" size={16} /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Название канала *</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="Например: Мой блог"
+              className="w-full px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Описание</label>
+            <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="О чём этот канал?" rows={3}
+              className="w-full px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 resize-none" />
+          </div>
+          <div className="flex items-center justify-between p-3 bg-muted rounded-xl">
+            <div>
+              <div className="text-sm font-medium">Публичный канал</div>
+              <div className="text-xs text-muted-foreground">Виден всем пользователям</div>
+            </div>
+            <button onClick={() => setIsPublic(!isPublic)}
+              className={`w-10 h-6 rounded-full transition-all relative ${isPublic ? "bg-primary" : "bg-muted-foreground/30"}`}>
+              <div className="w-5 h-5 bg-white rounded-full absolute top-0.5 shadow-sm transition-all" style={{ left: isPublic ? "calc(100% - 22px)" : "2px" }} />
+            </button>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-border text-sm hover:bg-muted transition-colors">Отмена</button>
+          <button onClick={() => name.trim() && onCreate(name.trim(), desc, isPublic)} disabled={!name.trim()}
+            className="flex-1 py-2.5 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-40">
+            Создать
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── EditChannelModal ─────────────────────────────────────────────────────────
+function EditChannelModal({ channel, onClose, onSave, onDelete, onUploadAvatar }: {
+  channel: Channel;
+  onClose: () => void;
+  onSave: (id: number, fields: { name?: string; description?: string; is_public?: boolean }) => void;
+  onDelete: (id: number) => void;
+  onUploadAvatar: (file: File) => void;
+}) {
+  const [name, setName] = useState(channel.name);
+  const [desc, setDesc] = useState(channel.description || "");
+  const [isPublic, setIsPublic] = useState(channel.is_public);
+  const [uploading, setUploading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    await onUploadAvatar(file);
+    setUploading(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="bg-card rounded-2xl border border-border w-full max-w-sm p-6 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-bold">Редактировать канал</h2>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted"><Icon name="X" size={16} /></button>
+        </div>
+
+        {/* Avatar */}
+        <div className="flex flex-col items-center gap-2">
+          <div className="relative">
+            <div className="w-20 h-20 rounded-2xl flex items-center justify-center text-white font-bold text-2xl overflow-hidden"
+              style={{ background: channel.avatar_color }}>
+              {channel.avatar_url ? <img src={channel.avatar_url} alt="" className="w-full h-full object-cover" /> : channel.name.slice(0,2).toUpperCase()}
+            </div>
+            <button onClick={() => fileRef.current?.click()} disabled={uploading}
+              className="absolute -bottom-1 -right-1 w-8 h-8 bg-primary text-white rounded-full flex items-center justify-center shadow-md">
+              {uploading ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Icon name="Camera" size={14} />}
+            </button>
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
+          </div>
+          <p className="text-xs text-muted-foreground">Нажмите для смены аватара</p>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Название</label>
+            <input value={name} onChange={e => setName(e.target.value)}
+              className="w-full px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Описание</label>
+            <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={3}
+              className="w-full px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 resize-none" />
+          </div>
+          <div className="flex items-center justify-between p-3 bg-muted rounded-xl">
+            <div>
+              <div className="text-sm font-medium">Публичный</div>
+              <div className="text-xs text-muted-foreground">Виден в поиске</div>
+            </div>
+            <button onClick={() => setIsPublic(!isPublic)}
+              className={`w-10 h-6 rounded-full transition-all relative ${isPublic ? "bg-primary" : "bg-muted-foreground/30"}`}>
+              <div className="w-5 h-5 bg-white rounded-full absolute top-0.5 shadow-sm transition-all" style={{ left: isPublic ? "calc(100% - 22px)" : "2px" }} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-border text-sm hover:bg-muted transition-colors">Отмена</button>
+          <button onClick={() => onSave(channel.id, { name, description: desc, is_public: isPublic })}
+            className="flex-1 py-2.5 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors">
+            Сохранить
+          </button>
+        </div>
+
+        {channel.role === "owner" && (
+          <div className="border-t border-border pt-3">
+            {confirmDelete ? (
+              <div className="space-y-2">
+                <p className="text-sm text-center text-muted-foreground">Удалить канал безвозвратно?</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setConfirmDelete(false)} className="flex-1 py-2 rounded-xl border border-border text-sm hover:bg-muted">Нет</button>
+                  <button onClick={() => onDelete(channel.id)} className="flex-1 py-2 rounded-xl bg-destructive text-white text-sm font-medium">Удалить</button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={() => setConfirmDelete(true)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-destructive hover:bg-destructive/10 transition-colors text-sm">
+                <Icon name="Trash2" size={15} />Удалить канал
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── PaymentModal ─────────────────────────────────────────────────────────────
+function PaymentModal({
+  plan, period, step, method, loading, paymentRef,
+  cardNumber, cardExpiry, cardCvv, cardName,
+  onSetPlan, onSetPeriod, onSetMethod,
+  onSetCardNumber, onSetCardExpiry, onSetCardCvv, onSetCardName,
+  onInitiate, onConfirm, onClose,
+}: {
+  plan: string; period: "month" | "year"; step: "select" | "form" | "success";
+  method: "card" | "sbp"; loading: boolean; paymentRef: string;
+  cardNumber: string; cardExpiry: string; cardCvv: string; cardName: string;
+  onSetPlan: (p: string) => void; onSetPeriod: (p: "month" | "year") => void;
+  onSetMethod: (m: "card" | "sbp") => void;
+  onSetCardNumber: (v: string) => void; onSetCardExpiry: (v: string) => void;
+  onSetCardCvv: (v: string) => void; onSetCardName: (v: string) => void;
+  onInitiate: (plan: string, period: "month" | "year") => void;
+  onConfirm: () => void; onClose: () => void;
+}) {
+  const PLAN_INFO: Record<string, { name: string; price_month: number; price_year: number; badge: string; color: string }> = {
+    standard: { name: "Standard", price_month: 149, price_year: 1490, badge: "✦ STANDARD", color: "#0ea5e9" },
+    premium: { name: "Premium", price_month: 499, price_year: 4990, badge: "⭐ PREMIUM", color: "#6366f1" },
+  };
+  const info = PLAN_INFO[plan] || PLAN_INFO.premium;
+  const amount = period === "year" ? info.price_year : info.price_month;
+  const periodLabel = period === "year" ? "год" : "месяц";
+
+  const formatCard = (v: string) => v.replace(/\D/g,"").slice(0,16).replace(/(\d{4})/g,"$1 ").trim();
+  const formatExpiry = (v: string) => { const d = v.replace(/\D/g,"").slice(0,4); return d.length > 2 ? d.slice(0,2)+"/"+d.slice(2) : d; };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="bg-card rounded-2xl border border-border w-full max-w-sm shadow-xl overflow-hidden">
+        <div className="flex items-center justify-between px-6 pt-5 pb-3">
+          <h2 className="text-base font-bold">
+            {step === "select" ? "Оформить подписку" : step === "form" ? "Оплата" : "Готово!"}
+          </h2>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted"><Icon name="X" size={16} /></button>
+        </div>
+
+        {step === "select" && (
+          <div className="px-6 pb-6 space-y-4">
+            {/* Plan selector */}
+            <div className="grid grid-cols-2 gap-2">
+              {["standard","premium"].map(p => {
+                const pi = PLAN_INFO[p];
+                return (
+                  <button key={p} onClick={() => onSetPlan(p)}
+                    className={`p-3 rounded-xl border-2 text-left transition-all ${plan === p ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/40"}`}>
+                    <div className="text-sm font-bold" style={{ color: pi.color }}>{pi.badge}</div>
+                    <div className="text-xs text-muted-foreground mt-1">{pi.price_month}₽/мес</div>
+                  </button>
+                );
+              })}
+            </div>
+            {/* Period selector */}
+            <div className="grid grid-cols-2 gap-2">
+              {([["month","1 месяц"],["year","1 год"]] as [string,string][]).map(([p, label]) => (
+                <button key={p} onClick={() => onSetPeriod(p as "month"|"year")}
+                  className={`p-3 rounded-xl border-2 text-left transition-all ${period === p ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/40"}`}>
+                  <div className="text-sm font-medium">{label}</div>
+                  <div className="text-xs text-muted-foreground">{p === "year" ? PLAN_INFO[plan]?.price_year+"₽" : PLAN_INFO[plan]?.price_month+"₽"}
+                    {p === "year" && <span className="ml-1 text-green-500 font-medium">-17%</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="bg-muted/60 rounded-xl p-3 text-sm">
+              <div className="font-semibold">{info.badge} · {periodLabel}</div>
+              <div className="text-muted-foreground text-xs mt-0.5">Итого: {amount}₽</div>
+            </div>
+            <button onClick={() => onInitiate(plan, period)} disabled={loading}
+              className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-all disabled:opacity-60 flex items-center justify-center gap-2">
+              {loading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : null}
+              Перейти к оплате — {amount}₽
+            </button>
+          </div>
+        )}
+
+        {step === "form" && (
+          <div className="px-6 pb-6 space-y-4">
+            <div className="bg-muted/60 rounded-xl p-3 text-sm flex items-center justify-between">
+              <div>
+                <div className="font-semibold">{info.badge}</div>
+                <div className="text-xs text-muted-foreground">{periodLabel} · {amount}₽</div>
+              </div>
+              <div className="text-xs text-muted-foreground font-mono">{paymentRef}</div>
+            </div>
+            {/* Method tabs */}
+            <div className="flex gap-2">
+              {([["card","Карта"],["sbp","СБП"]] as [string,string][]).map(([m,label]) => (
+                <button key={m} onClick={() => onSetMethod(m as "card"|"sbp")}
+                  className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all border-2 ${method === m ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground hover:border-muted-foreground/40"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {method === "card" && (
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Номер карты</label>
+                  <input value={formatCard(cardNumber)} onChange={e => onSetCardNumber(e.target.value.replace(/\s/g,""))}
+                    placeholder="0000 0000 0000 0000" maxLength={19}
+                    className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 font-mono" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Срок</label>
+                    <input value={formatExpiry(cardExpiry)} onChange={e => onSetCardExpiry(e.target.value)} placeholder="MM/YY" maxLength={5}
+                      className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 font-mono" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">CVV</label>
+                    <input value={cardCvv} onChange={e => onSetCardCvv(e.target.value.replace(/\D/g,"").slice(0,3))} placeholder="•••" maxLength={3} type="password"
+                      className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 font-mono" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Имя на карте</label>
+                  <input value={cardName} onChange={e => onSetCardName(e.target.value.toUpperCase())} placeholder="IVAN IVANOV"
+                    className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 font-mono" />
+                </div>
+              </div>
+            )}
+
+            {method === "sbp" && (
+              <div className="text-center py-4 space-y-3">
+                <div className="w-32 h-32 bg-muted rounded-2xl mx-auto flex items-center justify-center">
+                  <div className="text-4xl">📱</div>
+                </div>
+                <div className="text-sm text-muted-foreground">Откройте приложение банка и отсканируйте QR-код для оплаты через СБП</div>
+                <div className="font-mono text-xs bg-muted rounded-lg px-3 py-2">{paymentRef}</div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground justify-center">
+              <Icon name="Shield" size={11} />
+              <span>Защищено TLS-шифрованием</span>
+            </div>
+
+            <button onClick={onConfirm} disabled={loading || (method === "card" && (cardNumber.length < 16 || cardExpiry.length < 5 || cardCvv.length < 3))}
+              className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-all disabled:opacity-60 flex items-center justify-center gap-2">
+              {loading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : null}
+              Оплатить {amount}₽
+            </button>
+          </div>
+        )}
+
+        {step === "success" && (
+          <div className="px-6 pb-6 text-center space-y-4">
+            <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center mx-auto">
+              <Icon name="CheckCircle" size={36} className="text-green-500" />
+            </div>
+            <div>
+              <div className="font-bold text-lg">Оплата прошла!</div>
+              <div className="text-sm text-muted-foreground mt-1">{info.badge} активирован на {periodLabel}</div>
+              <div className="font-mono text-xs text-muted-foreground mt-1">{paymentRef}</div>
+            </div>
+            <button onClick={onClose} className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90">
+              Отлично!
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function Index() {
   const [onboardingDone, setOnboardingDone] = useState(() => !!localStorage.getItem("wc_onboarded"));
@@ -986,7 +1328,6 @@ export default function Index() {
   const [botInput, setBotInput] = useState("");
   const [botSending, setBotSending] = useState(false);
   const [subscription, setSubscription] = useState<Record<string, unknown> | null>(null);
-  const [subLoading, setSubLoading] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [deletingChat, setDeletingChat] = useState(false);
@@ -997,6 +1338,30 @@ export default function Index() {
     try { const s = localStorage.getItem("wc_settings"); return s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : DEFAULT_SETTINGS; }
     catch { return DEFAULT_SETTINGS; }
   });
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
+  const [channelPosts, setChannelPosts] = useState<ChannelPost[]>([]);
+  const [channelPostsLoading, setChannelPostsLoading] = useState(false);
+  const [channelSearchQuery, setChannelSearchQuery] = useState("");
+  const [channelSearchResults, setChannelSearchResults] = useState<Channel[]>([]);
+  const [channelSearchLoading, setChannelSearchLoading] = useState(false);
+  const [channelTab, setChannelTab] = useState<"all" | "my" | "search">("all");
+  const [showCreateChannel, setShowCreateChannel] = useState(false);
+  const [showEditChannel, setShowEditChannel] = useState(false);
+  const [channelPostInput, setChannelPostInput] = useState("");
+  const [channelPostSending, setChannelPostSending] = useState(false);
+  const [showPayment, setShowPayment] = useState(false);
+  const [paymentPlan, setPaymentPlan] = useState<string>("premium");
+  const [paymentPeriod, setPaymentPeriod] = useState<"month" | "year">("month");
+  const [paymentStep, setPaymentStep] = useState<"select" | "form" | "success">("select");
+  const [paymentMethod, setPaymentMethod] = useState<"card" | "sbp">("card");
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentRef, setPaymentRef] = useState("");
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardExpiry, setCardExpiry] = useState("");
+  const [cardCvv, setCardCvv] = useState("");
+  const [cardName, setCardName] = useState("");
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1098,6 +1463,10 @@ export default function Index() {
     if (user && section === "calls") loadCallHistory();
   }, [user, section, loadCallHistory]);
 
+  useEffect(() => {
+    if (user && section === "channels") loadChannels(channelTab as "all" | "my");
+  }, [user, section, channelTab, loadChannels]);
+
   const logout = async () => {
     await apiFetch(AUTH_URL, { method: "POST", body: JSON.stringify({ action: "logout" }) });
     localStorage.removeItem("wc_token");
@@ -1130,6 +1499,130 @@ export default function Index() {
     else setPeopleResults([]);
     setPeopleLoading(false);
   }, []);
+
+  const loadChannels = useCallback(async (tab: "all" | "my" = "all") => {
+    if (!CHANNELS_URL) return;
+    setChannelsLoading(true);
+    const action = tab === "my" ? "my" : "list";
+    const { ok, data } = await apiFetch(`${CHANNELS_URL}?action=${action}`);
+    if (ok) setChannels(data.channels || []);
+    setChannelsLoading(false);
+  }, []);
+
+  const searchChannels = useCallback(async (q: string) => {
+    if (!q.trim() || !CHANNELS_URL) { setChannelSearchResults([]); return; }
+    setChannelSearchLoading(true);
+    const { ok, data } = await apiFetch(`${CHANNELS_URL}?action=search&q=${encodeURIComponent(q)}`);
+    if (ok) setChannelSearchResults(data.channels || []);
+    setChannelSearchLoading(false);
+  }, []);
+
+  const loadChannelPosts = useCallback(async (channelId: number) => {
+    if (!CHANNELS_URL) return;
+    setChannelPostsLoading(true);
+    const { ok, data } = await apiFetch(`${CHANNELS_URL}?action=posts&id=${channelId}`);
+    if (ok) setChannelPosts(data.posts || []);
+    setChannelPostsLoading(false);
+  }, []);
+
+  const openChannel = (ch: Channel) => {
+    setActiveChannel(ch);
+    setChannelPosts([]);
+    loadChannelPosts(ch.id);
+    setMobileView("chat");
+  };
+
+  const subscribeChannel = async (ch: Channel) => {
+    if (!CHANNELS_URL) return;
+    const { ok, data } = await apiFetch(CHANNELS_URL, {
+      method: "POST", body: JSON.stringify({ action: "subscribe", channel_id: ch.id }),
+    });
+    if (ok) {
+      setChannels(prev => prev.map(c => c.id === ch.id ? { ...c, subscribed: data.subscribed, members_count: c.members_count + (data.subscribed ? 1 : -1) } : c));
+      if (activeChannel?.id === ch.id) setActiveChannel(prev => prev ? { ...prev, subscribed: data.subscribed } : prev);
+    }
+  };
+
+  const postToChannel = async () => {
+    if (!activeChannel || !channelPostInput.trim() || channelPostSending) return;
+    setChannelPostSending(true);
+    const { ok, data } = await apiFetch(CHANNELS_URL, {
+      method: "POST", body: JSON.stringify({ action: "post", channel_id: activeChannel.id, text: channelPostInput.trim() }),
+    });
+    if (ok) {
+      setChannelPosts(prev => [data.post, ...prev]);
+      setChannelPostInput("");
+    }
+    setChannelPostSending(false);
+  };
+
+  const deleteChannelPost = async (postId: number) => {
+    if (!activeChannel || !CHANNELS_URL) return;
+    const { ok } = await apiFetch(CHANNELS_URL, {
+      method: "POST", body: JSON.stringify({ action: "delete_post", post_id: postId, channel_id: activeChannel.id }),
+    });
+    if (ok) setChannelPosts(prev => prev.filter(p => p.id !== postId));
+  };
+
+  const createChannel = async (name: string, description: string, isPublic: boolean) => {
+    if (!name.trim() || !CHANNELS_URL) return;
+    const { ok, data } = await apiFetch(CHANNELS_URL, {
+      method: "POST", body: JSON.stringify({ action: "create", name, description, is_public: isPublic }),
+    });
+    if (ok) {
+      setShowCreateChannel(false);
+      setChannels(prev => [data.channel, ...prev]);
+      openChannel(data.channel);
+    }
+  };
+
+  const updateChannel = async (channelId: number, fields: { name?: string; description?: string; avatar_url?: string; is_public?: boolean }) => {
+    if (!CHANNELS_URL) return;
+    const { ok, data } = await apiFetch(CHANNELS_URL, {
+      method: "POST", body: JSON.stringify({ action: "update", channel_id: channelId, ...fields }),
+    });
+    if (ok && data.channel) {
+      setChannels(prev => prev.map(c => c.id === channelId ? { ...c, ...data.channel } : c));
+      setActiveChannel(prev => prev?.id === channelId ? { ...prev, ...data.channel } : prev);
+      setShowEditChannel(false);
+    }
+  };
+
+  const deleteChannel = async (channelId: number) => {
+    if (!CHANNELS_URL) return;
+    const { ok } = await apiFetch(CHANNELS_URL, {
+      method: "POST", body: JSON.stringify({ action: "delete", channel_id: channelId }),
+    });
+    if (ok) {
+      setChannels(prev => prev.filter(c => c.id !== channelId));
+      setActiveChannel(null);
+      setMobileView("list");
+    }
+  };
+
+  const initiatePayment = async (plan: string, period: "month" | "year") => {
+    setPaymentLoading(true);
+    const { ok, data } = await apiFetch(BOT_URL, {
+      method: "POST", body: JSON.stringify({ action: "create_payment", plan, period }),
+    });
+    if (ok) {
+      setPaymentRef(data.payment.ref);
+      setPaymentStep("form");
+    }
+    setPaymentLoading(false);
+  };
+
+  const confirmPayment = async () => {
+    setPaymentLoading(true);
+    const { ok } = await apiFetch(BOT_URL, {
+      method: "POST", body: JSON.stringify({ action: "confirm_payment", plan: paymentPlan, period: paymentPeriod, payment_ref: paymentRef }),
+    });
+    if (ok) {
+      setPaymentStep("success");
+      await loadSubscription();
+    }
+    setPaymentLoading(false);
+  };
 
   const sendMessage = async (overrides?: Partial<Message>) => {
     if (!activeChat || sending) return;
@@ -1215,11 +1708,11 @@ export default function Index() {
     setBotSending(false);
   };
 
-  const paySubscription = async (plan: string) => {
-    setSubLoading(true);
-    const { ok } = await apiFetch(BOT_URL, { method: "POST", body: JSON.stringify({ action: "pay_subscription", plan }) });
-    if (ok) { await loadSubscription(); await loadBotHistory(); }
-    setSubLoading(false);
+  const paySubscription = (plan: string) => {
+    setPaymentPlan(plan);
+    setPaymentPeriod("month");
+    setPaymentStep("select");
+    setShowPayment(true);
   };
 
   const startCall = async (partner: User, type: "audio" | "video") => {
@@ -1616,28 +2109,86 @@ export default function Index() {
 
           {/* CHANNELS */}
           {section === "channels" && (
-            <div className="px-4 py-2">
-              {[
-                { name: "WorChat Новости", sub: "Официальный канал", members: "12.4K", icon: "Rss", color: "#6366f1" },
-                { name: "Технологии", sub: "Последние новости IT", members: "8.1K", icon: "Cpu", color: "#0ea5e9" },
-                { name: "Дизайн", sub: "UI/UX вдохновение", members: "5.3K", icon: "Palette", color: "#f59e0b" },
-                { name: "Крипто", sub: "Курсы и аналитика", members: "21K", icon: "TrendingUp", color: "#10b981" },
-              ].map(ch => (
-                <button key={ch.name}
-                  className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left">
-                  <div className="w-11 h-11 rounded-full flex items-center justify-center text-white shrink-0"
-                    style={{ background: ch.color }}>
-                    <Icon name={ch.icon} size={20} />
+            <div>
+              {/* Tabs */}
+              <div className="flex gap-1 px-4 py-2 border-b border-border">
+                {([["all","Все"],["my","Мои"],["search","Поиск"]] as [string,string][]).map(([id,label]) => (
+                  <button key={id} onClick={() => { setChannelTab(id as "all"|"my"|"search"); setChannelSearchQuery(""); setChannelSearchResults([]); }}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all ${channelTab === id ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted"}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Search input */}
+              {channelTab === "search" && (
+                <div className="px-4 py-2">
+                  <div className="relative">
+                    <Icon name="Search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input value={channelSearchQuery}
+                      onChange={e => { setChannelSearchQuery(e.target.value); searchChannels(e.target.value); }}
+                      placeholder="Название канала..."
+                      className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{ch.name}</div>
-                    <div className="text-xs text-muted-foreground">{ch.sub}</div>
-                  </div>
-                  <div className="text-xs text-muted-foreground shrink-0">{ch.members}</div>
-                </button>
-              ))}
-              <div className="mt-3 pt-3 border-t border-border">
-                <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border hover:bg-muted/60 transition-colors text-muted-foreground text-sm">
+                </div>
+              )}
+
+              {/* Channel list */}
+              <div>
+                {channelsLoading && (
+                  <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+                )}
+                {channelSearchLoading && channelTab === "search" && (
+                  <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+                )}
+                {(() => {
+                  const list = channelTab === "search" ? channelSearchResults : channels;
+                  if (!channelsLoading && !channelSearchLoading && list.length === 0 && channelTab !== "search") {
+                    return (
+                      <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground text-center px-4">
+                        <Icon name="Rss" size={36} className="opacity-20" />
+                        <p className="text-sm">{channelTab === "my" ? "У вас нет каналов" : "Каналов пока нет"}</p>
+                      </div>
+                    );
+                  }
+                  if (channelTab === "search" && channelSearchQuery && !channelSearchLoading && channelSearchResults.length === 0) {
+                    return <div className="text-center py-8 text-muted-foreground text-sm">Ничего не найдено</div>;
+                  }
+                  if (channelTab === "search" && !channelSearchQuery) {
+                    return (
+                      <div className="flex flex-col items-center justify-center py-12 gap-2 text-muted-foreground text-center px-4">
+                        <Icon name="Search" size={36} className="opacity-20" />
+                        <p className="text-sm">Введите название канала</p>
+                      </div>
+                    );
+                  }
+                  return list.map((ch, i) => (
+                    <button key={ch.id} onClick={() => openChannel(ch)}
+                      className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/60 transition-colors text-left animate-fade-in
+                        ${activeChannel?.id === ch.id ? "bg-primary/[0.07] border-r-2 border-primary" : ""}`}
+                      style={{ animationDelay: `${i * 20}ms` }}>
+                      <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg shrink-0 overflow-hidden"
+                        style={{ background: ch.avatar_color }}>
+                        {ch.avatar_url ? <img src={ch.avatar_url} alt="" className="w-full h-full object-cover" /> : ch.name.slice(0,2).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1">
+                          <span className="text-sm font-medium truncate">{ch.name}</span>
+                          {!ch.is_public && <Icon name="Lock" size={11} className="text-muted-foreground shrink-0" />}
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">{ch.description || "Канал"}</div>
+                      </div>
+                      <div className="text-xs text-muted-foreground shrink-0">{ch.members_count >= 1000 ? `${(ch.members_count/1000).toFixed(1)}K` : ch.members_count}</div>
+                    </button>
+                  ));
+                })()}
+              </div>
+
+              {/* Create button */}
+              <div className="px-4 py-3 border-t border-border mt-2">
+                <button onClick={() => setShowCreateChannel(true)}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border hover:bg-muted/60 transition-colors text-muted-foreground text-sm">
                   <Icon name="Plus" size={16} />Создать канал
                 </button>
               </div>
@@ -1670,6 +2221,134 @@ export default function Index() {
 
       {/* ── Main area ── */}
       <div className={`flex-1 flex flex-col ${mobileView === "list" && !activeChat ? "hidden md:flex" : "flex"}`}>
+
+        {/* CHANNEL screen */}
+        {section === "channels" && activeChannel && (
+          <div className="flex flex-col h-full">
+            {/* Channel header */}
+            <div className="h-14 px-4 flex items-center gap-3 border-b border-border bg-card shrink-0">
+              <button onClick={() => { setActiveChannel(null); setMobileView("list"); }}
+                className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted">
+                <Icon name="ArrowLeft" size={18} className="text-muted-foreground" />
+              </button>
+              <div className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold shrink-0 overflow-hidden"
+                style={{ background: activeChannel.avatar_color }}>
+                {activeChannel.avatar_url ? <img src={activeChannel.avatar_url} alt="" className="w-full h-full object-cover" /> : activeChannel.name.slice(0,2).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm font-semibold truncate">{activeChannel.name}</span>
+                  {!activeChannel.is_public && <Icon name="Lock" size={12} className="text-muted-foreground" />}
+                </div>
+                <div className="text-xs text-muted-foreground">{activeChannel.members_count.toLocaleString()} подписчиков</div>
+              </div>
+              <div className="flex items-center gap-1">
+                {activeChannel.role === "owner" || activeChannel.role === "admin" ? (
+                  <button onClick={() => setShowEditChannel(true)}
+                    className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted transition-colors">
+                    <Icon name="Settings" size={17} className="text-muted-foreground" />
+                  </button>
+                ) : (
+                  <button onClick={() => subscribeChannel(activeChannel)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all
+                      ${activeChannel.subscribed ? "bg-muted text-muted-foreground hover:bg-destructive/10 hover:text-destructive" : "bg-primary text-white hover:bg-primary/90"}`}>
+                    {activeChannel.subscribed ? "Отписаться" : "Подписаться"}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Channel info banner */}
+            <div className="px-4 py-3 bg-muted/30 border-b border-border shrink-0 flex items-center gap-3">
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white font-bold text-2xl shrink-0 overflow-hidden"
+                style={{ background: activeChannel.avatar_color }}>
+                {activeChannel.avatar_url ? <img src={activeChannel.avatar_url} alt="" className="w-full h-full object-cover" /> : activeChannel.name.slice(0,2).toUpperCase()}
+              </div>
+              <div>
+                <div className="font-semibold text-base">{activeChannel.name}</div>
+                {activeChannel.description && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{activeChannel.description}</div>}
+                <div className="flex items-center gap-3 mt-1">
+                  <span className="text-xs text-muted-foreground">{activeChannel.members_count.toLocaleString()} подписчиков</span>
+                  <span className="text-xs text-muted-foreground">{activeChannel.is_public ? "Публичный" : "Приватный"}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Posts */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+              {channelPostsLoading && (
+                <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+              )}
+              {!channelPostsLoading && channelPosts.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
+                  <Icon name="FileText" size={40} className="opacity-20" />
+                  <p className="text-sm">Постов пока нет</p>
+                </div>
+              )}
+              {channelPosts.map(post => (
+                <div key={post.id} className="bg-card rounded-2xl border border-border p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 overflow-hidden"
+                        style={{ background: post.author.avatar_color }}>
+                        {post.author.avatar_url ? <img src={post.author.avatar_url} alt="" className="w-full h-full object-cover" /> : post.author.avatar_initials}
+                      </div>
+                      <span className="text-xs font-medium text-muted-foreground">{activeChannel.name}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-xs text-muted-foreground">{post.ts}</span>
+                      {(activeChannel.role === "owner" || activeChannel.role === "admin") && (
+                        <button onClick={() => deleteChannelPost(post.id)}
+                          className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors">
+                          <Icon name="Trash2" size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap leading-relaxed">{post.text}</p>
+                  {post.media_url && (
+                    <div className="mt-2">
+                      {post.msg_type === "image" ? (
+                        <img src={post.media_url} alt="" className="rounded-xl max-h-60 object-cover w-full" />
+                      ) : (
+                        <a href={post.media_url} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-2 p-2 bg-muted rounded-xl text-sm hover:bg-muted/80">
+                          <Icon name="Paperclip" size={14} />
+                          <span className="truncate">{post.media_name || "Файл"}</span>
+                        </a>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
+                    <Icon name="Eye" size={11} />
+                    <span>{post.views}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Post input (owner/admin only) */}
+            {(activeChannel.role === "owner" || activeChannel.role === "admin") && (
+              <div className="px-4 py-3 border-t border-border bg-card shrink-0">
+                <div className="flex items-end gap-2">
+                  <textarea
+                    value={channelPostInput}
+                    onChange={e => setChannelPostInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) postToChannel(); }}
+                    placeholder="Написать пост..."
+                    rows={2}
+                    className="flex-1 px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 resize-none"
+                  />
+                  <button onClick={postToChannel} disabled={!channelPostInput.trim() || channelPostSending}
+                    className="w-10 h-10 flex items-center justify-center rounded-xl bg-primary text-white disabled:opacity-40 hover:bg-primary/90 transition-all shrink-0">
+                    {channelPostSending ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Icon name="Send" size={16} />}
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Ctrl+Enter для отправки</p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* BOT screen */}
         {section === "bots" && activeBotId === "worchat_bot" && (
@@ -1707,10 +2386,10 @@ export default function Index() {
                       <div className="max-w-xs bg-card border border-border rounded-2xl p-4 shadow-sm animate-fade-in">
                         <p className="text-sm text-foreground mb-3 whitespace-pre-wrap leading-relaxed">{bm.text}</p>
                         {!subscription ? (
-                          <button onClick={() => paySubscription(planId)} disabled={subLoading}
-                            className="w-full py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-60"
+                          <button onClick={() => paySubscription(planId)}
+                            className="w-full py-2.5 rounded-xl text-white text-sm font-semibold"
                             style={{ background: planId === "premium" ? "linear-gradient(135deg,#6366f1,#a855f7,#ec4899)" : "linear-gradient(135deg,#0ea5e9,#06b6d4)" }}>
-                            {subLoading ? "Оформляем..." : planId === "premium" ? "Оформить Premium — 499₽/мес" : "Оформить Standard — 149₽/мес"}
+                            {planId === "premium" ? "Оформить Premium — 499₽/мес" : "Оформить Standard — 149₽/мес"}
                           </button>
                         ) : (
                           <div className="text-center text-sm text-green-600 font-medium">✓ Подписка активна</div>
@@ -1970,6 +2649,52 @@ export default function Index() {
       </div>
 
       {chatMenuOpen && <div className="fixed inset-0 z-40" onClick={() => setChatMenuOpen(false)} />}
+
+      {/* ── Create Channel Modal ── */}
+      {showCreateChannel && <CreateChannelModal onClose={() => setShowCreateChannel(false)} onCreate={createChannel} />}
+
+      {/* ── Edit Channel Modal ── */}
+      {showEditChannel && activeChannel && (
+        <EditChannelModal
+          channel={activeChannel}
+          onClose={() => setShowEditChannel(false)}
+          onSave={updateChannel}
+          onDelete={deleteChannel}
+          onUploadAvatar={async (file) => {
+            const b64 = await fileToBase64(file);
+            const { ok, data } = await apiFetch(UPLOAD_URL, {
+              method: "POST", body: JSON.stringify({ type: "avatar", mime: file.type, data: b64, name: file.name }),
+            });
+            if (ok) await updateChannel(activeChannel.id, { avatar_url: data.url });
+          }}
+        />
+      )}
+
+      {/* ── Payment Modal ── */}
+      {showPayment && (
+        <PaymentModal
+          plan={paymentPlan}
+          period={paymentPeriod}
+          step={paymentStep}
+          method={paymentMethod}
+          loading={paymentLoading}
+          paymentRef={paymentRef}
+          cardNumber={cardNumber}
+          cardExpiry={cardExpiry}
+          cardCvv={cardCvv}
+          cardName={cardName}
+          onSetPlan={setPaymentPlan}
+          onSetPeriod={setPaymentPeriod}
+          onSetMethod={setPaymentMethod}
+          onSetCardNumber={setCardNumber}
+          onSetCardExpiry={setCardExpiry}
+          onSetCardCvv={setCardCvv}
+          onSetCardName={setCardName}
+          onInitiate={initiatePayment}
+          onConfirm={confirmPayment}
+          onClose={() => { setShowPayment(false); setPaymentStep("select"); setCardNumber(""); setCardExpiry(""); setCardCvv(""); setCardName(""); }}
+        />
+      )}
     </div>
   );
 }

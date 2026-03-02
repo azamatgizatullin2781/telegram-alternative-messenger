@@ -1,9 +1,11 @@
 """
 WorChat Bot — приветствие, подписки Standard и Premium, поддержка пользователей.
 GET  /?action=history      — история сообщений с ботом
-GET  /?action=subscription — текущая подписка и планы
+GET  /?action=subscription — текущая подписка и все планы
 POST {action: send}        — отправить сообщение боту
-POST {action: pay_subscription, plan: standard|premium} — оформить подписку
+POST {action: create_payment} — создать платёжную сессию
+POST {action: confirm_payment} — подтвердить оплату (webhook/ручная проверка)
+POST {action: cancel_subscription} — отменить подписку
 """
 import os
 import json
@@ -18,15 +20,16 @@ CORS = {
     "Access-Control-Allow-Headers": "Content-Type, X-Session-Token",
 }
 
+# Планы: id -> {month: price, year: price_year}
 PLANS = {
     "standard": {
         "id": "standard",
         "name": "Standard",
-        "price": 149,
-        "currency": "₽",
-        "period": "месяц",
         "badge": "✦ STANDARD",
         "color": "#0ea5e9",
+        "price_month": 149,
+        "price_year": 1490,
+        "currency": "₽",
         "features": [
             "Файлы до 1 ГБ",
             "История сообщений 3 месяца",
@@ -47,17 +50,17 @@ PLANS = {
             "• 👍 Реакции на сообщения\n"
             "• 🎧 Приоритетная поддержка\n"
             "• 🚫 Без рекламы\n\n"
-            "💙 Цена: 149₽/месяц"
+            "💙 Цена: 149₽/мес или 1490₽/год (2 месяца в подарок)"
         ),
     },
     "premium": {
         "id": "premium",
         "name": "Premium",
-        "price": 499,
-        "currency": "₽",
-        "period": "месяц",
         "badge": "⭐ PREMIUM",
         "color": "#6366f1",
+        "price_month": 499,
+        "price_year": 4990,
+        "currency": "₽",
         "features": [
             "Безлимитные файлы до 10 ГБ",
             "Бессрочная история сообщений",
@@ -88,33 +91,15 @@ PLANS = {
             "• 🔐 Шифрование AES-512\n"
             "• 🚀 Ранний доступ к функциям\n"
             "• 👤 Персональный менеджер\n\n"
-            "💎 Цена: 499₽/месяц"
+            "💎 Цена: 499₽/мес или 4990₽/год (2 месяца в подарок)"
         ),
     },
 }
 
 WELCOME_FLOW = [
-    {
-        "text": (
-            "👋 Привет! Я WorChat Bot — твой личный помощник.\n\n"
-            "Добро пожаловать в самый защищённый мессенджер! 🚀"
-        )
-    },
-    {
-        "text": (
-            "🔐 Все твои сообщения защищены сквозным шифрованием AES-512.\n"
-            "Даже мы не можем их прочитать."
-        )
-    },
-    {
-        "text": (
-            "✨ У нас есть два тарифа подписки:\n\n"
-            "✦ Standard — 149₽/мес\n"
-            "⭐ Premium — 499₽/мес\n\n"
-            "Напиши /plans чтобы узнать подробности.\n"
-            "Или /help для списка команд."
-        )
-    },
+    {"text": "👋 Привет! Я WorChat Bot — твой личный помощник.\n\nДобро пожаловать в самый защищённый мессенджер! 🚀"},
+    {"text": "🔐 Все твои сообщения защищены сквозным шифрованием AES-512.\nДаже мы не можем их прочитать."},
+    {"text": "✨ У нас есть два тарифа подписки:\n\n✦ Standard — 149₽/мес (1490₽/год)\n⭐ Premium — 499₽/мес (4990₽/год)\n\nНапиши /plans чтобы узнать подробности.\nИли /help для списка команд."},
 ]
 
 
@@ -188,7 +173,7 @@ def get_subscription(user_id):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        f"SELECT id, plan, status, started_at, expires_at FROM {SCHEMA}.subscriptions "
+        f"SELECT id, plan, status, started_at, expires_at, payment_ref FROM {SCHEMA}.subscriptions "
         f"WHERE user_id = %s AND status = 'active' AND expires_at > NOW() "
         f"ORDER BY expires_at DESC LIMIT 1",
         (user_id,),
@@ -201,15 +186,22 @@ def get_subscription(user_id):
         "id": row[0], "plan": row[1], "status": row[2],
         "started_at": row[3].strftime("%d.%m.%Y"),
         "expires_at": row[4].strftime("%d.%m.%Y"),
+        "payment_ref": row[5],
     }
 
 
-def activate_subscription(user_id, plan, payment_ref):
+def activate_subscription(user_id, plan, period, payment_ref):
     conn = get_conn()
     cur = conn.cursor()
+    interval = "1 year" if period == "year" else "1 month"
     cur.execute(
-        f"INSERT INTO {SCHEMA}.subscriptions (user_id, plan, status, payment_ref) "
-        f"VALUES (%s, %s, 'active', %s) RETURNING id",
+        f"UPDATE {SCHEMA}.subscriptions SET status = 'cancelled' "
+        f"WHERE user_id = %s AND status = 'active'",
+        (user_id,),
+    )
+    cur.execute(
+        f"INSERT INTO {SCHEMA}.subscriptions (user_id, plan, status, payment_ref, expires_at) "
+        f"VALUES (%s, %s, 'active', %s, NOW() + INTERVAL '{interval}') RETURNING id",
         (user_id, plan, payment_ref),
     )
     sub_id = cur.fetchone()[0]
@@ -221,120 +213,106 @@ def activate_subscription(user_id, plan, payment_ref):
 def bot_reply(user_id, text, display_name=""):
     t = text.strip().lower()
 
-    # /plans — показать оба тарифа
     if any(w in t for w in ["/plans", "/тарифы", "тарифы", "планы", "подписки"]):
         reply = (
             "📋 Тарифы WorChat:\n\n"
-            "✦ Standard — 149₽/мес\n"
+            "✦ Standard\n"
+            "• 149₽/мес или 1490₽/год\n"
             "• Файлы до 1 ГБ, история 3 мес\n"
-            "• 5 устройств, папки чатов\n"
-            "• Реакции, статус Standard\n\n"
-            "⭐ Premium — 499₽/мес\n"
+            "• 5 устройств, папки чатов\n\n"
+            "⭐ Premium\n"
+            "• 499₽/мес или 4990₽/год\n"
             "• Файлы до 10 ГБ (безлимит)\n"
             "• Бессрочная история\n"
-            "• Видеозвонки HD 4K\n"
-            "• Кастомные темы, анимированные аватары\n"
-            "• @username.premium\n\n"
+            "• Видеозвонки HD 4K\n\n"
             "Напиши /standard или /premium для оформления."
         )
         save_msg(user_id, "bot", reply)
         return {"text": reply, "type": "text"}
 
-    # Standard
     if any(w in t for w in ["/standard", "standard", "стандарт", "стандартную"]):
         sub = get_subscription(user_id)
-        if sub:
-            reply = f"✦ У тебя уже активна подписка {sub['plan'].title()}!\nДействует до: {sub['expires_at']}"
+        if sub and sub["plan"] == "standard":
+            reply = f"✦ У тебя уже активен Standard!\nДействует до: {sub['expires_at']}"
             save_msg(user_id, "bot", reply)
             return {"text": reply, "type": "text"}
         plan = PLANS["standard"]
         save_msg(user_id, "bot", plan["description"], {"type": "subscription_offer", "plan": "standard"})
         return {"text": plan["description"], "type": "subscription_offer", "plan": "standard"}
 
-    # Premium
-    if any(w in t for w in ["/premium", "premium", "премиум", "премиум-подписку", "/subscription", "подписка", "купить", "оплатить", "stellar"]):
+    if any(w in t for w in ["/premium", "premium", "премиум", "премиум-подписку", "/subscription", "подписка", "купить", "оплатить"]):
         sub = get_subscription(user_id)
         if sub and sub["plan"] == "premium":
-            reply = f"⭐ У тебя уже активна Premium подписка!\nДействует до: {sub['expires_at']}\n\nСпасибо, что с нами! 🚀"
+            reply = f"⭐ У тебя уже активен Premium!\nДействует до: {sub['expires_at']}"
             save_msg(user_id, "bot", reply)
             return {"text": reply, "type": "text"}
         plan = PLANS["premium"]
         save_msg(user_id, "bot", plan["description"], {"type": "subscription_offer", "plan": "premium"})
         return {"text": plan["description"], "type": "subscription_offer", "plan": "premium"}
 
-    # Статус подписки
-    if any(w in t for w in ["/status", "/mysub", "моя подписка", "мой тариф"]):
+    if any(w in t for w in ["/status", "статус", "моя подписка", "мой тариф"]):
         sub = get_subscription(user_id)
         if sub:
-            plan_info = PLANS.get(sub["plan"], {})
+            plan = PLANS.get(sub["plan"], {})
             reply = (
-                f"{'⭐' if sub['plan'] == 'premium' else '✦'} Твоя подписка: {sub['plan'].title()}\n\n"
-                f"Активна с: {sub['started_at']}\n"
-                f"Действует до: {sub['expires_at']}\n\n"
-                f"Цена: {plan_info.get('price', '?')}₽/мес"
+                f"{plan.get('badge', sub['plan'].upper())} Активная подписка\n\n"
+                f"Тариф: {sub['plan'].title()}\n"
+                f"Действует до: {sub['expires_at']}\n"
+                f"Номер платежа: {sub.get('payment_ref', '—')}"
             )
         else:
-            reply = (
-                "У тебя нет активной подписки.\n\n"
-                "Напиши /plans чтобы посмотреть тарифы,\n"
-                "или /standard и /premium для оформления."
-            )
+            reply = "У тебя нет активной подписки.\n\nНапиши /plans для просмотра тарифов."
         save_msg(user_id, "bot", reply)
         return {"text": reply, "type": "text"}
 
-    # /start, привет
-    if any(w in t for w in ["/start", "привет", "hello", "hi", "начать", "старт"]):
-        name = display_name.split()[0] if display_name else "друг"
+    if any(w in t for w in ["/start", "начать", "привет", "hello", "hi"]):
+        reply = f"👋 Привет, {display_name}!\n\nЯ WorChat Bot — твой личный помощник.\nНапиши /help для списка команд."
+        save_msg(user_id, "bot", reply)
+        return {"text": reply, "type": "text"}
+
+    if any(w in t for w in ["/help", "помощь", "команды", "help"]):
         reply = (
-            f"👋 Привет, {name}!\n\n"
-            "Я здесь, чтобы помочь. Что тебя интересует?\n\n"
-            "• /plans — тарифы подписки\n"
-            "• /standard — Standard за 149₽/мес\n"
-            "• /premium — Premium за 499₽/мес\n"
-            "• /status — статус твоей подписки\n"
-            "• /help — все команды"
+            "📌 Команды WorChat Bot:\n\n"
+            "/plans — тарифы подписки\n"
+            "/standard — оформить Standard\n"
+            "/premium — оформить Premium\n"
+            "/status — моя подписка\n"
+            "/help — список команд\n\n"
+            "По всем вопросам: support@worchat.app"
         )
         save_msg(user_id, "bot", reply)
         return {"text": reply, "type": "text"}
 
-    # /help
-    if any(w in t for w in ["/help", "помощь", "помоги", "команды"]):
-        reply = (
-            "🤖 Команды WorChat Bot:\n\n"
-            "/plans — все тарифы подписки\n"
-            "/standard — оформить Standard (149₽)\n"
-            "/premium — оформить Premium (499₽)\n"
-            "/status — статус твоей подписки\n"
-            "/start — приветствие\n"
-            "/help — этот список\n\n"
-            "Или просто напиши что-нибудь!"
-        )
-        save_msg(user_id, "bot", reply)
-        return {"text": reply, "type": "text"}
-
-    # Дефолт
     reply = (
-        f"Понял, записал: «{text[:60]}{'...' if len(text) > 60 else ''}» 🤖\n\n"
-        "Попробуй /plans, /standard, /premium или /help."
+        f"Привет! Я не понял запрос «{text[:50]}».\n\n"
+        "Попробуй:\n"
+        "• /plans — посмотреть тарифы\n"
+        "• /status — статус подписки\n"
+        "• /help — все команды"
     )
     save_msg(user_id, "bot", reply)
     return {"text": reply, "type": "text"}
 
 
 def handler(event: dict, context) -> dict:
-    """WorChat Bot — подписки Standard/Premium, приветствие, поддержка."""
+    """Bot and subscriptions handler."""
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": CORS, "body": ""}
 
+    method = event.get("httpMethod", "GET")
     token = event.get("headers", {}).get("X-Session-Token", "")
+
+    if not token:
+        return {"statusCode": 401, "headers": CORS, "body": json.dumps({"error": "Не авторизован"})}
+
     user_id, display_name = verify_token(token)
     if not user_id:
-        return {"statusCode": 401, "headers": CORS, "body": json.dumps({"error": "Unauthorized"})}
+        return {"statusCode": 401, "headers": CORS, "body": json.dumps({"error": "Сессия истекла"})}
 
-    method = event.get("httpMethod", "GET")
+    params = event.get("queryStringParameters") or {}
 
     if method == "GET":
-        action = (event.get("queryStringParameters") or {}).get("action", "history")
+        action = params.get("action", "history")
 
         if action == "history":
             send_welcome(user_id)
@@ -343,39 +321,85 @@ def handler(event: dict, context) -> dict:
 
         if action == "subscription":
             sub = get_subscription(user_id)
-            return {"statusCode": 200, "headers": CORS, "body": json.dumps({"subscription": sub, "plans": PLANS})}
+            plans_list = []
+            for p in PLANS.values():
+                plans_list.append({
+                    "id": p["id"],
+                    "name": p["name"],
+                    "badge": p["badge"],
+                    "color": p["color"],
+                    "price_month": p["price_month"],
+                    "price_year": p["price_year"],
+                    "currency": p["currency"],
+                    "features": p["features"],
+                })
+            return {"statusCode": 200, "headers": CORS, "body": json.dumps({"subscription": sub, "plans": plans_list})}
 
     if method == "POST":
         body = json.loads(event.get("body") or "{}")
-        action = body.get("action", "")
+        action = body.get("action", "send")
 
         if action == "send":
-            text = body.get("text", "").strip()
+            text = (body.get("text") or "").strip()
             if not text:
-                return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "Empty"})}
+                return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "Нет текста"})}
             save_msg(user_id, "user", text)
-            reply_data = bot_reply(user_id, text, display_name or "")
-            return {"statusCode": 200, "headers": CORS, "body": json.dumps({"reply": reply_data})}
+            reply = bot_reply(user_id, text, display_name)
+            return {"statusCode": 200, "headers": CORS, "body": json.dumps({"reply": reply})}
 
-        if action == "pay_subscription":
+        if action == "create_payment":
             plan_id = body.get("plan", "premium")
-            if plan_id not in PLANS:
-                return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "Unknown plan"})}
-            sub = get_subscription(user_id)
-            if sub and sub["plan"] == plan_id:
-                return {"statusCode": 200, "headers": CORS, "body": json.dumps({"status": "already_active", "subscription": sub})}
-            ref = f"WC-{uuid.uuid4().hex[:12].upper()}"
-            activate_subscription(user_id, plan_id, ref)
+            period = body.get("period", "month")
+            if plan_id not in PLANS or period not in ("month", "year"):
+                return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "Неверные параметры"})}
             plan = PLANS[plan_id]
-            confirm = (
-                f"{'⭐' if plan_id == 'premium' else '✦'} Поздравляю! "
-                f"Подписка {plan['name']} активирована!\n\n"
-                f"Номер платежа: {ref}\n"
-                f"Сумма: {plan['price']}{plan['currency']}/{plan['period']}\n\n"
-                f"Спасибо за поддержку WorChat! 🚀"
-            )
-            save_msg(user_id, "bot", confirm)
-            new_sub = get_subscription(user_id)
-            return {"statusCode": 200, "headers": CORS, "body": json.dumps({"status": "activated", "subscription": new_sub})}
+            amount = plan["price_year"] if period == "year" else plan["price_month"]
+            payment_ref = f"WC-{uuid.uuid4().hex[:12].upper()}"
+            return {"statusCode": 200, "headers": CORS, "body": json.dumps({
+                "payment": {
+                    "ref": payment_ref,
+                    "plan": plan_id,
+                    "period": period,
+                    "amount": amount,
+                    "currency": "RUB",
+                    "description": f"WorChat {plan['name']} — {'1 год' if period == 'year' else '1 месяц'}",
+                }
+            })}
 
-    return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "Bad request"})}
+        if action == "confirm_payment":
+            plan_id = body.get("plan", "premium")
+            period = body.get("period", "month")
+            payment_ref = body.get("payment_ref", f"WC-{uuid.uuid4().hex[:12].upper()}")
+            if plan_id not in PLANS:
+                return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "Неверный план"})}
+            sub_id = activate_subscription(user_id, plan_id, period, payment_ref)
+            plan = PLANS[plan_id]
+            amount = plan["price_year"] if period == "year" else plan["price_month"]
+            period_label = "1 год" if period == "year" else "1 месяц"
+            confirm_text = (
+                f"{plan['badge']} Подписка {plan['name']} оформлена!\n\n"
+                f"Период: {period_label}\n"
+                f"Сумма: {amount}₽\n"
+                f"Номер платежа: {payment_ref}\n\n"
+                f"Спасибо за доверие! 🎉"
+            )
+            save_msg(user_id, "bot", confirm_text)
+            return {"statusCode": 200, "headers": CORS, "body": json.dumps({
+                "sub_id": sub_id, "message": confirm_text, "payment_ref": payment_ref
+            })}
+
+        if action == "cancel_subscription":
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE {SCHEMA}.subscriptions SET status = 'cancelled' "
+                f"WHERE user_id = %s AND status = 'active'",
+                (user_id,),
+            )
+            conn.commit()
+            conn.close()
+            reply = "Подписка отменена. Жаль расставаться! 😢\n\nНапиши /plans чтобы снова подписаться."
+            save_msg(user_id, "bot", reply)
+            return {"statusCode": 200, "headers": CORS, "body": json.dumps({"cancelled": True, "message": reply})}
+
+    return {"statusCode": 404, "headers": CORS, "body": json.dumps({"error": "Not found"})}

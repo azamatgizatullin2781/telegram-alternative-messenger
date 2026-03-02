@@ -15,6 +15,13 @@
       "bodyMatcher": "partial"
     },
     {
+      "name": "Search channels without token",
+      "method": "GET",
+      "path": "/?action=search&q=test",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
       "name": "Create channel without token",
       "method": "POST",
       "path": "/",

@@ -26,10 +26,10 @@
       "expectedStatus": 401
     },
     {
-      "name": "Pay subscription without token",
+      "name": "Create payment without token",
       "method": "POST",
       "path": "/",
-      "body": {"action": "pay_subscription", "plan": "premium"},
+      "body": {"action": "create_payment", "plan": "premium", "period": "month"},
       "expectedStatus": 401
     }
   ]
