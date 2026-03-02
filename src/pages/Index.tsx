@@ -934,7 +934,7 @@ function SettingsScreen({
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-type Section = "chats" | "channels" | "bots" | "calls" | "contacts" | "archive" | "search" | "settings" | "profile";
+type Section = "chats" | "channels" | "bots" | "contacts" | "archive" | "search" | "settings" | "profile";
 
 export default function Index() {
   const [onboardingDone, setOnboardingDone] = useState(() => !!localStorage.getItem("wc_onboarded"));
@@ -1017,7 +1017,7 @@ export default function Index() {
   }, []);
 
   useEffect(() => {
-    if (user && (section === "contacts" || section === "search" || section === "calls")) loadContacts();
+    if (user && (section === "contacts" || section === "search")) loadContacts();
   }, [user, section, loadContacts]);
 
   const loadMessages = useCallback(async (chatId: number) => {
@@ -1181,7 +1181,16 @@ export default function Index() {
     const { ok, data } = await apiFetch(BOT_URL, { method: "POST", body: JSON.stringify({ action: "send", text }) });
     if (ok) {
       const reply = data.reply;
-      setBotMessages((prev) => [...prev, { id: Date.now() + 1, role: "bot", text: reply.text, extra: reply, time: new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }) }]);
+      setBotMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          role: "bot" as const,
+          text: reply.text,
+          extra: reply.type === "subscription_offer" ? { type: "subscription_offer", plan: reply.plan } : undefined,
+          time: new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
+        },
+      ]);
       if (reply.type === "subscription_offer") loadSubscription();
     }
     setBotSending(false);
@@ -1232,7 +1241,6 @@ export default function Index() {
     { id: "chats", icon: "MessageSquare", label: "Чаты" },
     { id: "channels", icon: "Rss", label: "Каналы" },
     { id: "bots", icon: "Bot", label: "Боты" },
-    { id: "calls", icon: "Phone", label: "Звонки" },
     { id: "contacts", icon: "Users", label: "Контакты" },
     { id: "search", icon: "Search", label: "Поиск" },
     { id: "settings", icon: "Settings", label: "Настройки" },
@@ -1244,9 +1252,18 @@ export default function Index() {
     <div className="h-screen flex overflow-hidden bg-background">
       {/* Sidebar nav */}
       <div className="w-16 flex-col items-center py-3 gap-1 border-r border-border bg-card shrink-0 hidden md:flex">
-        <div className="w-10 h-10 rounded-2xl bg-primary flex items-center justify-center mb-2 shadow-md shadow-primary/20">
-          <Icon name="Lock" size={18} className="text-white" />
-        </div>
+        <button onClick={() => setSection("profile")}
+          title="Профиль"
+          className={`w-11 h-11 rounded-2xl overflow-hidden transition-all mb-1 ${section === "profile" ? "ring-2 ring-primary" : "hover:ring-2 hover:ring-muted-foreground/30"}`}>
+          {user.avatar_url ? (
+            <img src={user.avatar_url} alt={user.display_name} className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-white text-sm font-semibold"
+              style={{ background: user.avatar_color }}>
+              {user.avatar_initials || user.display_name.slice(0, 2).toUpperCase()}
+            </div>
+          )}
+        </button>
         {navItems.map((item) => (
           <button key={item.id} onClick={() => { setSection(item.id); if (item.id !== "chats") { setActiveChat(null); setMobileView("list"); } }}
             title={item.label}
@@ -1260,15 +1277,6 @@ export default function Index() {
             )}
           </button>
         ))}
-        <div className="mt-auto">
-          <button onClick={() => setSection("profile")}
-            className={`w-11 h-11 rounded-2xl overflow-hidden transition-all ${section === "profile" ? "ring-2 ring-primary" : ""}`}>
-            <div className="w-full h-full flex items-center justify-center text-white text-sm font-semibold"
-              style={{ background: user.avatar_color }}>
-              {user.avatar_initials || user.display_name.slice(0, 2).toUpperCase()}
-            </div>
-          </button>
-        </div>
       </div>
 
       {/* Left panel */}
@@ -1543,13 +1551,7 @@ export default function Index() {
             </div>
           )}
 
-          {/* CALLS */}
-          {section === "calls" && (
-            <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
-              <Icon name="PhoneOff" size={36} className="opacity-25" />
-              <p className="text-sm">Нет истории звонков</p>
-            </div>
-          )}
+
         </div>
       </div>
 
