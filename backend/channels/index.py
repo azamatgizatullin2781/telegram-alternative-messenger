@@ -17,6 +17,16 @@ import os
 import psycopg2
 import re
 import random
+from datetime import datetime, timezone, timedelta
+
+MSK = timedelta(hours=3)
+
+def fmt_ts(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone(MSK)).strftime("%d.%m.%Y %H:%M")
 
 SCHEMA = os.environ.get("MAIN_DB_SCHEMA", "t_p42269837_telegram_alternative")
 
@@ -172,7 +182,7 @@ def handler(event: dict, context) -> dict:
                 cur = conn.cursor()
                 cur.execute(f"""
                     SELECT cp.id, cp.text, cp.msg_type, cp.media_url, cp.media_name, cp.views,
-                           to_char(cp.created_at AT TIME ZONE 'Europe/Moscow','DD.MM.YYYY HH24:MI') as ts,
+                           cp.created_at,
                            u.display_name, u.avatar_color, u.avatar_initials, u.avatar_url
                     FROM {SCHEMA}.channel_posts cp
                     JOIN {SCHEMA}.users u ON u.id = cp.sender_id
@@ -190,7 +200,7 @@ def handler(event: dict, context) -> dict:
                 cur.close()
                 posts = [{
                     "id": r[0], "text": r[1], "msg_type": r[2], "media_url": r[3],
-                    "media_name": r[4], "views": r[5], "ts": r[6],
+                    "media_name": r[4], "views": r[5], "ts": fmt_ts(r[6]),
                     "author": {"display_name": r[7], "avatar_color": r[8],
                                "avatar_initials": r[9], "avatar_url": r[10]}
                 } for r in rows]

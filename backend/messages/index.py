@@ -14,8 +14,10 @@ POST / {action: delete_chat}— удалить чат
 import json
 import os
 import psycopg2
+from datetime import datetime, timezone, timedelta
 
 SCHEMA = os.environ.get("MAIN_DB_SCHEMA", "t_p42269837_telegram_alternative")
+MSK = timedelta(hours=3)
 
 CORS = {
     "Access-Control-Allow-Origin": "*",
@@ -25,6 +27,15 @@ CORS = {
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"])
+
+def fmt_time(dt):
+    """Форматируем datetime в HH:MM по московскому времени (+3 UTC)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    msk_dt = dt.astimezone(timezone(MSK))
+    return msk_dt.strftime("%H:%M")
 
 def get_user_by_token(conn, token: str):
     cur = conn.cursor()
@@ -54,7 +65,7 @@ def row_to_msg(r, me_id, reactions_map=None):
         "sender_id": r[1],
         "text": r[2] or "",
         "status": r[3],
-        "time": r[4],
+        "time": fmt_time(r[4]),
         "out": r[1] == me_id,
         "msg_type": r[5] or "text",
         "media_url": r[6],
@@ -66,7 +77,7 @@ def row_to_msg(r, me_id, reactions_map=None):
         "contact_name": r[12],
         "contact_phone": r[13],
         "reply_to_id": r[14],
-        "edited_at": r[15].strftime("%H:%M") if r[15] else None,
+        "edited_at": fmt_time(r[15]),
         "is_removed": bool(r[16]) if r[16] is not None else False,
         "reactions": reactions_map.get(msg_id, []) if reactions_map else [],
     }
@@ -80,7 +91,7 @@ def load_reactions(conn, message_ids):
         SELECT mr.message_id, mr.emoji, mr.user_id, u.display_name
         FROM {SCHEMA}.message_reactions mr
         JOIN {SCHEMA}.users u ON u.id = mr.user_id
-        WHERE mr.message_id IN ({ids_str})
+        WHERE mr.message_id IN ({ids_str}) AND mr.emoji != ''
         ORDER BY mr.created_at
     """)
     rows = cur.fetchall()
@@ -150,10 +161,9 @@ def handler(event: dict, context) -> dict:
 
             after_id = params.get("after")
             if after_id:
-                # Polling mode: only new messages
                 cur.execute(f"""
                     SELECT m.id, m.sender_id, m.text, m.status,
-                           to_char(m.created_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI') as time_fmt,
+                           m.created_at,
                            m.msg_type, m.media_url, m.media_name, m.media_size, m.media_duration,
                            m.geo_lat, m.geo_lon, m.contact_name, m.contact_phone, m.reply_to_id,
                            m.edited_at, m.is_removed
@@ -163,10 +173,9 @@ def handler(event: dict, context) -> dict:
                     LIMIT 50
                 """, (chat_id, int(after_id)))
             else:
-                # Full load
                 cur.execute(f"""
                     SELECT m.id, m.sender_id, m.text, m.status,
-                           to_char(m.created_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI') as time_fmt,
+                           m.created_at,
                            m.msg_type, m.media_url, m.media_name, m.media_size, m.media_duration,
                            m.geo_lat, m.geo_lon, m.contact_name, m.contact_phone, m.reply_to_id,
                            m.edited_at, m.is_removed
@@ -212,7 +221,6 @@ def handler(event: dict, context) -> dict:
                 contact_name = body.get("contact_name")
                 contact_phone = body.get("contact_phone")
                 reply_to_id = body.get("reply_to_id")
-                forwarded_from_id = body.get("forwarded_from_id")
 
                 if msg_type == "text" and not text:
                     return err(400, "text обязателен")
@@ -228,7 +236,7 @@ def handler(event: dict, context) -> dict:
                       (chat_id, sender_id, text, status, msg_type, media_url, media_name,
                        media_size, media_duration, geo_lat, geo_lon, contact_name, contact_phone, reply_to_id)
                     VALUES (%s, %s, %s, 'sent', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id, to_char(created_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI')
+                    RETURNING id, created_at
                 """, (chat_id, user["id"], text, msg_type, media_url, media_name,
                       media_size, media_duration, geo_lat, geo_lon, contact_name, contact_phone, reply_to_id))
                 row = cur.fetchone()
@@ -238,7 +246,7 @@ def handler(event: dict, context) -> dict:
                 return ok({
                     "message": {
                         "id": row[0], "sender_id": user["id"], "text": text,
-                        "status": "sent", "time": row[1], "out": True,
+                        "status": "sent", "time": fmt_time(row[1]), "out": True,
                         "msg_type": msg_type, "media_url": media_url, "media_name": media_name,
                         "media_size": media_size, "media_duration": media_duration,
                         "geo_lat": geo_lat, "geo_lon": geo_lon,
@@ -261,12 +269,12 @@ def handler(event: dict, context) -> dict:
                 cur.execute(f"""
                     UPDATE {SCHEMA}.messages SET text = %s, edited_at = NOW()
                     WHERE id = %s
-                    RETURNING to_char(edited_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI')
+                    RETURNING edited_at
                 """, (new_text, msg_id))
-                edited_time = cur.fetchone()[0]
+                edited_at = cur.fetchone()[0]
                 conn.commit()
                 cur.close()
-                return ok({"ok": True, "message_id": msg_id, "text": new_text, "edited_at": edited_time})
+                return ok({"ok": True, "message_id": msg_id, "text": new_text, "edited_at": fmt_time(edited_at)})
 
             if action == "remove":
                 msg_id = body.get("message_id")
@@ -289,19 +297,15 @@ def handler(event: dict, context) -> dict:
                 if not msg_id or not emoji:
                     return err(400, "message_id и emoji обязательны")
                 cur = conn.cursor()
-                # Toggle: if same emoji exists — remove, else upsert
                 cur.execute(f"""
                     SELECT emoji FROM {SCHEMA}.message_reactions
                     WHERE message_id = %s AND user_id = %s
                 """, (msg_id, user["id"]))
                 existing = cur.fetchone()
                 if existing and existing[0] == emoji:
-                    # Remove reaction
-                    cur.execute(f"UPDATE {SCHEMA}.message_reactions SET emoji = 'removed' WHERE message_id = %s AND user_id = %s", (msg_id, user["id"]))
-                    # Actually we need to remove row — use workaround: mark removed by setting to special value then filter in reads
-                    # Better: just update to empty to avoid DELETE restriction
                     cur.execute(f"""
-                        UPDATE {SCHEMA}.message_reactions SET emoji = '' WHERE message_id = %s AND user_id = %s
+                        UPDATE {SCHEMA}.message_reactions SET emoji = ''
+                        WHERE message_id = %s AND user_id = %s
                     """, (msg_id, user["id"]))
                     conn.commit()
                     cur.close()
@@ -351,7 +355,6 @@ def handler(event: dict, context) -> dict:
                 if not cur.fetchone():
                     cur.close()
                     return err(403, "Нет доступа")
-                # Soft-remove all messages
                 cur.execute(f"UPDATE {SCHEMA}.messages SET is_removed = TRUE, text = '' WHERE chat_id = %s", (chat_id,))
                 conn.commit()
                 cur.close()

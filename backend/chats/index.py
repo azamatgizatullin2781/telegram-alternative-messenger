@@ -8,8 +8,17 @@ POST / {action: start} — начать чат с пользователем
 import json
 import os
 import psycopg2
+from datetime import datetime, timezone, timedelta
 
 SCHEMA = os.environ.get("MAIN_DB_SCHEMA", "t_p42269837_telegram_alternative")
+MSK = timedelta(hours=3)
+
+def fmt_time(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone(MSK)).strftime("%H:%M")
 
 CORS = {
     "Access-Control-Allow-Origin": "*",
@@ -93,8 +102,7 @@ def handler(event: dict, context) -> dict:
         if method == "GET" and action == "contacts":
             cur = conn.cursor()
             cur.execute(f"""
-                SELECT id, username, display_name, avatar_color, avatar_initials, status,
-                       to_char(last_seen_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI DD.MM') as last_seen
+                SELECT id, username, display_name, avatar_color, avatar_initials, status, last_seen_at
                 FROM {SCHEMA}.users
                 WHERE id != %s
                 ORDER BY display_name
@@ -104,7 +112,7 @@ def handler(event: dict, context) -> dict:
             contacts = [
                 {"id": r[0], "username": r[1], "display_name": r[2],
                  "avatar_color": r[3], "avatar_initials": r[4],
-                 "status": r[5], "last_seen_at": r[6]}
+                 "status": r[5], "last_seen_at": fmt_time(r[6])}
                 for r in rows
             ]
             return ok({"contacts": contacts})
@@ -115,7 +123,7 @@ def handler(event: dict, context) -> dict:
                 SELECT c.id, c.type,
                        u.id, u.username, u.display_name, u.avatar_color, u.avatar_initials, u.status,
                        (SELECT text FROM {SCHEMA}.messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_text,
-                       (SELECT to_char(created_at AT TIME ZONE 'Europe/Moscow', 'HH24:MI') FROM {SCHEMA}.messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_time,
+                       (SELECT created_at FROM {SCHEMA}.messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_time,
                        (SELECT sender_id FROM {SCHEMA}.messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_sender,
                        (SELECT COUNT(*) FROM {SCHEMA}.messages m WHERE m.chat_id = c.id AND m.sender_id != %s AND m.status = 'sent') as unread
                 FROM {SCHEMA}.chats c
@@ -134,7 +142,7 @@ def handler(event: dict, context) -> dict:
                     "partner": {"id": r[2], "username": r[3], "display_name": r[4],
                                 "avatar_color": r[5], "avatar_initials": r[6], "status": r[7]},
                     "last_text": r[8] or "",
-                    "last_time": r[9] or "",
+                    "last_time": fmt_time(r[9]) or "",
                     "last_sender_id": r[10],
                     "unread": int(r[11])
                 })
