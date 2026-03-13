@@ -13,6 +13,7 @@ import {
   OnboardingScreen, AuthScreen, Avatar, Badge,
   MessageBubble, IncomingCallModal, CallScreen,
   SettingsScreen, CreateChannelModal, EditChannelModal, PaymentModal,
+  VoiceRecorder, VideoNoteRecorder, UserProfileModal, PhotoViewer,
 } from "./IndexComponents";
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
@@ -80,6 +81,10 @@ export default function Index() {
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [editInput, setEditInput] = useState("");
   const [msgContextMenu, setMsgContextMenu] = useState<{msg: Message; x: number; y: number} | null>(null);
+  const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
+  const [showVideoNoteRecorder, setShowVideoNoteRecorder] = useState(false);
+  const [viewingProfile, setViewingProfile] = useState<User | null>(null);
+  const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -332,10 +337,10 @@ export default function Index() {
     if (ok) setChannelPosts(prev => prev.filter(p => p.id !== postId));
   };
 
-  const createChannel = async (name: string, description: string, isPublic: boolean) => {
+  const createChannel = async (name: string, description: string, isPublic: boolean, category?: string, username?: string) => {
     if (!name.trim() || !CHANNELS_URL) return;
     const { ok, data } = await apiFetch(CHANNELS_URL, {
-      method: "POST", body: JSON.stringify({ action: "create", name, description, is_public: isPublic }),
+      method: "POST", body: JSON.stringify({ action: "create", name, description, is_public: isPublic, category: category || "general", slug: username || undefined }),
     });
     if (ok) {
       setShowCreateChannel(false);
@@ -537,6 +542,48 @@ export default function Index() {
     setMsgContextMenu(null);
   };
 
+  const sendVoiceMessage = async (blob: Blob, duration: number) => {
+    if (!activeChat) return;
+    setShowVoiceRecorder(false);
+    setUploadingMedia(true);
+    const b64 = await new Promise<string>((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = () => res((reader.result as string).split(",")[1]);
+      reader.onerror = rej;
+      reader.readAsDataURL(blob);
+    });
+    const { ok, data } = await apiFetch(UPLOAD_URL, {
+      method: "POST",
+      body: JSON.stringify({ type: "voice", mime: blob.type || "audio/webm", data: b64, name: `voice_${Date.now()}.webm` }),
+    });
+    if (ok) {
+      await sendMessage({ msg_type: "voice", media_url: data.url, media_name: "Голосовое", media_size: blob.size, text: "",
+        ...(({ media_duration: duration } as unknown) as Partial<Message>) });
+    }
+    setUploadingMedia(false);
+  };
+
+  const sendVideoNote = async (blob: Blob, duration: number) => {
+    if (!activeChat) return;
+    setShowVideoNoteRecorder(false);
+    setUploadingMedia(true);
+    const b64 = await new Promise<string>((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = () => res((reader.result as string).split(",")[1]);
+      reader.onerror = rej;
+      reader.readAsDataURL(blob);
+    });
+    const { ok, data } = await apiFetch(UPLOAD_URL, {
+      method: "POST",
+      body: JSON.stringify({ type: "video_note", mime: "video/webm", data: b64, name: `videonote_${Date.now()}.webm` }),
+    });
+    if (ok) {
+      await sendMessage({ msg_type: "video_note", media_url: data.url, text: "",
+        ...(({ media_duration: duration } as unknown) as Partial<Message>) });
+    }
+    setUploadingMedia(false);
+  };
+
   const paySubscription = (plan: string) => {
     setPaymentPlan(plan);
     setPaymentPeriod("month");
@@ -619,6 +666,31 @@ export default function Index() {
           onEnd={() => { setActiveCall(null); loadCallHistory(); }}
         />
       )}
+
+      {/* Voice recorder */}
+      {showVoiceRecorder && (
+        <div className="fixed bottom-0 left-0 right-0 z-[100] px-4 pb-6 pt-2">
+          <VoiceRecorder onSend={sendVoiceMessage} onCancel={() => setShowVoiceRecorder(false)} />
+        </div>
+      )}
+
+      {/* Video note recorder */}
+      {showVideoNoteRecorder && (
+        <VideoNoteRecorder onSend={sendVideoNote} onCancel={() => setShowVideoNoteRecorder(false)} />
+      )}
+
+      {/* User profile modal */}
+      {viewingProfile && (
+        <UserProfileModal
+          user={viewingProfile}
+          onClose={() => setViewingProfile(null)}
+          onStartChat={() => { startChatWithContact(viewingProfile); setViewingProfile(null); }}
+          onCall={(type) => { startCall(viewingProfile, type); setViewingProfile(null); }}
+        />
+      )}
+
+      {/* Photo viewer */}
+      {viewingPhoto && <PhotoViewer url={viewingPhoto} onClose={() => setViewingPhoto(null)} />}
 
       {/* ── Desktop sidebar ── */}
       <div className="w-16 flex-col items-center py-3 gap-1 border-r border-border bg-card shrink-0 hidden md:flex">
@@ -857,14 +929,14 @@ export default function Index() {
                 <div className="text-center py-8 text-muted-foreground text-sm">Пользователи не найдены</div>
               )}
               {peopleResults.map(u => (
-                <button key={u.id} onClick={() => startChatWithContact(u)}
+                <button key={u.id} onClick={() => setViewingProfile(u)}
                   className="w-full flex items-center gap-3 py-3 px-2 hover:bg-muted/60 rounded-xl transition-colors text-left">
                   <Avatar user={u} size={44} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{u.display_name}</div>
                     <div className="text-xs text-muted-foreground">@{u.username}</div>
                   </div>
-                  <Icon name="MessageCircle" size={16} className="text-muted-foreground shrink-0" />
+                  <Icon name="User" size={16} className="text-muted-foreground shrink-0" />
                 </button>
               ))}
             </div>
@@ -887,15 +959,19 @@ export default function Index() {
                       {st === "online" ? `Онлайн · ${list.length}` : `Не в сети · ${list.length}`}
                     </div>
                     {list.map(c => (
-                      <button key={c.id} onClick={() => startChatWithContact(c)}
-                        className={`w-full flex items-center gap-3 py-2.5 px-2 hover:bg-muted/60 rounded-xl transition-colors text-left ${st === "offline" ? "opacity-55" : ""}`}>
-                        <Avatar user={c} size={40} />
-                        <div className="flex-1 min-w-0">
+                      <div key={c.id} className={`flex items-center gap-3 py-2.5 px-2 ${st === "offline" ? "opacity-55" : ""}`}>
+                        <button onClick={() => setViewingProfile(c)} className="shrink-0">
+                          <Avatar user={c} size={40} />
+                        </button>
+                        <button onClick={() => setViewingProfile(c)} className="flex-1 min-w-0 text-left hover:bg-muted/60 rounded-xl px-2 py-1 -mx-2 -my-1 transition-colors">
                           <div className="text-sm font-medium">{c.display_name}</div>
                           <div className="text-xs text-muted-foreground">@{c.username}</div>
-                        </div>
-                        <Icon name="MessageCircle" size={15} className="ml-auto text-muted-foreground" />
-                      </button>
+                        </button>
+                        <button onClick={() => startChatWithContact(c)}
+                          className="w-9 h-9 rounded-xl hover:bg-muted flex items-center justify-center transition-colors shrink-0">
+                          <Icon name="MessageCircle" size={15} className="text-muted-foreground" />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 );
@@ -1275,8 +1351,10 @@ export default function Index() {
                 className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted">
                 <Icon name="ArrowLeft" size={18} className="text-muted-foreground" />
               </button>
-              <Avatar user={activeChat.partner} size={36} />
-              <div className="flex-1 min-w-0">
+              <button onClick={() => setViewingProfile(activeChat.partner)}>
+                <Avatar user={activeChat.partner} size={36} />
+              </button>
+              <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewingProfile(activeChat.partner)}>
                 <div className="text-sm font-semibold truncate">{activeChat.partner.display_name}</div>
                 <div className={`text-xs transition-all ${typingUsers.length > 0 ? "text-primary" : activeChat.partner.status === "online" ? "text-green-500" : "text-muted-foreground"}`}>
                   {typingUsers.length > 0 ? "печатает..." : activeChat.partner.status === "online" ? "В сети" : "Не в сети"}
@@ -1384,7 +1462,11 @@ export default function Index() {
                         <div className={`px-3.5 py-2 rounded-2xl cursor-pointer
                           ${msg.out ? "msg-out rounded-br-sm" : "msg-in rounded-bl-sm shadow-sm border border-border"}
                           ${isRemoved ? "opacity-50 italic" : ""}`}
-                          onClick={e => { if (window.getSelection()?.toString()) return; setMsgContextMenu({ msg, x: e.clientX, y: e.clientY }); }}>
+                          onClick={e => {
+                            if (window.getSelection()?.toString()) return;
+                            if (msg.msg_type === "image" && msg.media_url) { setViewingPhoto(msg.media_url); return; }
+                            setMsgContextMenu({ msg, x: e.clientX, y: e.clientY });
+                          }}>
                           {isRemoved ? (
                             <p className="text-sm text-muted-foreground">Сообщение удалено</p>
                           ) : (
@@ -1500,6 +1582,20 @@ export default function Index() {
                     </div>
                     <span className="text-xs text-muted-foreground">Видео</span>
                   </button>
+                  <button onClick={() => { setShowAttach(false); setShowVideoNoteRecorder(true); }}
+                    className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
+                    <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center">
+                      <Icon name="CirclePlay" size={22} className="text-indigo-600" />
+                    </div>
+                    <span className="text-xs text-muted-foreground">Кружок</span>
+                  </button>
+                  <button onClick={() => { setShowAttach(false); setShowVoiceRecorder(true); }}
+                    className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
+                    <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
+                      <Icon name="Mic" size={22} className="text-red-600" />
+                    </div>
+                    <span className="text-xs text-muted-foreground">Голос</span>
+                  </button>
                   <button onClick={() => { fileInputRef.current?.setAttribute("data-type","audio"); fileInputRef.current?.setAttribute("accept","audio/*"); fileInputRef.current?.click(); }}
                     className="flex flex-col items-center gap-1.5 py-3 rounded-xl hover:bg-muted/60 transition-colors">
                     <div className="w-12 h-12 rounded-full bg-orange-100 flex items-center justify-center">
@@ -1540,14 +1636,20 @@ export default function Index() {
             )}
 
             {/* Input */}
-            <div className="px-4 py-3 bg-card border-t border-border shrink-0">
-              <div className="flex items-end gap-2">
+            <div className="px-3 py-2.5 bg-card border-t border-border shrink-0">
+              <div className="flex items-end gap-1.5">
                 {!editingMessage && (
-                  <button onClick={() => setShowAttach(!showAttach)}
-                    className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
-                      ${showAttach ? "bg-primary text-white" : "hover:bg-muted text-muted-foreground"}`}>
-                    <Icon name="Paperclip" size={18} />
-                  </button>
+                  <>
+                    <button onClick={() => setShowAttach(!showAttach)}
+                      className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
+                        ${showAttach ? "bg-primary text-white" : "hover:bg-muted text-muted-foreground"}`}>
+                      <Icon name="Paperclip" size={18} />
+                    </button>
+                    <button onClick={() => setShowVideoNoteRecorder(true)}
+                      className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-muted text-muted-foreground transition-all shrink-0" title="Видеокружок">
+                      <Icon name="CirclePlay" size={18} />
+                    </button>
+                  </>
                 )}
                 <textarea
                   value={editingMessage ? editInput : input}
@@ -1568,19 +1670,26 @@ export default function Index() {
                   }}
                   placeholder={editingMessage ? "Редактировать сообщение..." : "Написать сообщение..."}
                   rows={1}
-                  className="flex-1 px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30 resize-none max-h-28 transition-all"
+                  className="flex-1 px-3 py-2 text-sm rounded-xl bg-mcalls border-0 outline-none focus:ring-2 focus:ring-primary/30 resize-none max-h-28 transition-all bg-muted"
                   style={{ lineHeight: "1.5" }}
                   autoFocus={!!editingMessage}
                 />
-                <button
-                  onClick={() => { if (editingMessage) { editMessage(editingMessage.id, editInput); } else sendMessage(); }}
-                  disabled={(editingMessage ? !editInput.trim() : !input.trim()) || sending}
-                  className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
-                    ${(editingMessage ? editInput.trim() : input.trim()) && !sending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
-                  {sending
-                    ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    : <Icon name={editingMessage ? "Check" : "Send"} size={16} />}
-                </button>
+                {!editingMessage && !input.trim() ? (
+                  <button onClick={() => setShowVoiceRecorder(true)}
+                    className="w-9 h-9 flex items-center justify-center rounded-xl bg-primary text-white hover:bg-primary/90 transition-all shrink-0">
+                    <Icon name="Mic" size={18} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => { if (editingMessage) { editMessage(editingMessage.id, editInput); } else sendMessage(); }}
+                    disabled={(editingMessage ? !editInput.trim() : !input.trim()) || sending}
+                    className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
+                      ${(editingMessage ? editInput.trim() : input.trim()) && !sending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
+                    {sending
+                      ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      : <Icon name={editingMessage ? "Check" : "Send"} size={16} />}
+                  </button>
+                )}
               </div>
             </div>
           </>
