@@ -474,15 +474,20 @@ export function VoiceRecorder({ onSend, onCancel }: {
   const [duration, setDuration] = useState(0);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [recorded, setRecorded] = useState<Blob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [levels, setLevels] = useState<number[]>(Array(20).fill(2));
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animRef = useRef<number>(0);
   const durationRef = useRef(0);
 
   useEffect(() => {
     startRecording();
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      cancelAnimationFrame(animRef.current);
       mediaRef.current?.stop();
     };
   }, []);
@@ -490,11 +495,40 @@ export function VoiceRecorder({ onSend, onCancel }: {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/ogg" });
+
+      // Analyser for waveform visualization
+      const ctx = new AudioContext();
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 64;
+      src.connect(analyser);
+      analyserRef.current = analyser;
+
+      const drawLevels = () => {
+        const buf = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(buf);
+        const bars = Array.from({ length: 20 }, (_, i) => {
+          const idx = Math.floor(i * buf.length / 20);
+          return Math.max(2, Math.round((buf[idx] / 255) * 32));
+        });
+        setLevels(bars);
+        animRef.current = requestAnimationFrame(drawLevels);
+      };
+      drawLevels();
+
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "audio/ogg";
+
+      const mr = new MediaRecorder(stream, { mimeType });
       mediaRef.current = mr;
       chunksRef.current = [];
       mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.onstop = () => {
+        cancelAnimationFrame(animRef.current);
+        ctx.close();
         const blob = new Blob(chunksRef.current, { type: mr.mimeType });
         setRecorded(blob);
         setAudioUrl(URL.createObjectURL(blob));
@@ -507,8 +541,13 @@ export function VoiceRecorder({ onSend, onCancel }: {
         durationRef.current += 1;
         setDuration(durationRef.current);
       }, 1000);
-    } catch {
-      onCancel();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("Permission") || msg.includes("NotAllowed") || msg.includes("denied")) {
+        setError("Нет доступа к микрофону. Разрешите в браузере.");
+      } else {
+        setError("Не удалось запустить запись.");
+      }
     }
   };
 
@@ -519,6 +558,16 @@ export function VoiceRecorder({ onSend, onCancel }: {
   };
 
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+  if (error) {
+    return (
+      <div className="flex items-center gap-3 bg-destructive/10 border border-destructive/30 rounded-2xl px-3 py-2.5">
+        <Icon name="MicOff" size={18} className="text-destructive shrink-0" />
+        <span className="text-sm text-destructive flex-1">{error}</span>
+        <button onClick={onCancel} className="text-xs text-muted-foreground hover:text-foreground">Закрыть</button>
+      </div>
+    );
+  }
 
   if (!recording && audioUrl && recorded) {
     return (
@@ -541,13 +590,13 @@ export function VoiceRecorder({ onSend, onCancel }: {
       <button onClick={onCancel} className="w-8 h-8 flex items-center justify-center rounded-xl text-destructive hover:bg-destructive/10">
         <Icon name="X" size={16} />
       </button>
-      <div className="flex-1 flex items-center gap-2">
-        <div className="w-2.5 h-2.5 bg-destructive rounded-full animate-pulse" />
-        <span className="text-sm text-destructive font-medium">{fmt(duration)}</span>
-        <div className="flex-1 flex gap-0.5 items-center">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="flex-1 bg-destructive/40 rounded-full animate-pulse"
-              style={{ height: `${4 + Math.random() * 12}px`, animationDelay: `${i * 100}ms` }} />
+      <div className="flex-1 flex items-center gap-2 overflow-hidden">
+        <div className="w-2 h-2 bg-destructive rounded-full animate-pulse shrink-0" />
+        <span className="text-sm text-destructive font-medium shrink-0">{fmt(duration)}</span>
+        <div className="flex-1 flex gap-px items-center overflow-hidden">
+          {levels.map((h, i) => (
+            <div key={i} className="flex-1 bg-destructive/60 rounded-full transition-all duration-75"
+              style={{ height: `${h}px`, minWidth: "2px" }} />
           ))}
         </div>
       </div>
@@ -569,6 +618,7 @@ export function VideoNoteRecorder({ onSend, onCancel }: {
   const [duration, setDuration] = useState(0);
   const [preview, setPreview] = useState<string | null>(null);
   const [recorded, setRecorded] = useState<Blob | null>(null);
+  const [camError, setCamError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -600,8 +650,13 @@ export function VideoNoteRecorder({ onSend, onCancel }: {
           startRec(stream);
         }
       }, 1000);
-    } catch {
-      onCancel();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("Permission") || msg.includes("NotAllowed") || msg.includes("denied")) {
+        setCamError("Нет доступа к камере. Разрешите в настройках браузера.");
+      } else {
+        setCamError("Камера недоступна или занята другим приложением.");
+      }
     }
   };
 
@@ -635,6 +690,23 @@ export function VideoNoteRecorder({ onSend, onCancel }: {
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   const progress = Math.min(duration / 60, 1);
   const r = 52, circ = 2 * Math.PI * r;
+
+  if (camError) {
+    return (
+      <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div className="bg-card rounded-3xl p-6 w-full max-w-xs shadow-2xl space-y-4 text-center">
+          <div className="w-14 h-14 rounded-full bg-destructive/10 flex items-center justify-center mx-auto">
+            <Icon name="VideoOff" size={26} className="text-destructive" />
+          </div>
+          <div>
+            <p className="font-bold text-base mb-1">Нет доступа к камере</p>
+            <p className="text-sm text-muted-foreground">{camError}</p>
+          </div>
+          <button onClick={onCancel} className="w-full py-2.5 rounded-xl bg-muted text-sm hover:bg-muted/80">Закрыть</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-[300] flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm p-4">
@@ -934,12 +1006,14 @@ export function CallScreen({ partner, callType, roomId, isCallee, onEnd }: {
   const formatDur = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
   const toggleMic = () => {
-    localStreamRef.current?.getAudioTracks().forEach(t => { t.enabled = micMuted; });
-    setMicMuted(m => !m);
+    const next = !micMuted;
+    localStreamRef.current?.getAudioTracks().forEach(t => { t.enabled = !next; });
+    setMicMuted(next);
   };
   const toggleCam = () => {
-    localStreamRef.current?.getVideoTracks().forEach(t => { t.enabled = camOff; });
-    setCamOff(c => !c);
+    const next = !camOff;
+    localStreamRef.current?.getVideoTracks().forEach(t => { t.enabled = !next; });
+    setCamOff(next);
   };
 
   const handleEnd = async () => {

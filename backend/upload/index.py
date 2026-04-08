@@ -13,17 +13,41 @@ CORS = {
     "Access-Control-Allow-Headers": "Content-Type, X-Session-Token",
 }
 
-ALLOWED_TYPES = {
-    "image": ["image/jpeg", "image/png", "image/gif", "image/webp"],
-    "video": ["video/mp4", "video/webm", "video/quicktime"],
-    "audio": ["audio/mpeg", "audio/ogg", "audio/wav", "audio/m4a", "audio/mp4"],
-    "document": [
-        "application/pdf", "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "text/plain", "application/zip", "application/x-rar-compressed",
-    ],
+ALLOWED_MIME = {
+    # Images
+    "image/jpeg": ("image", "jpg"),
+    "image/png": ("image", "png"),
+    "image/gif": ("image", "gif"),
+    "image/webp": ("image", "webp"),
+    # Video
+    "video/mp4": ("video", "mp4"),
+    "video/webm": ("video", "webm"),
+    "video/quicktime": ("video", "mov"),
+    "video/x-matroska": ("video", "mkv"),
+    # Audio (all variants browsers produce)
+    "audio/mpeg": ("audio", "mp3"),
+    "audio/mp3": ("audio", "mp3"),
+    "audio/ogg": ("audio", "ogg"),
+    "audio/wav": ("audio", "wav"),
+    "audio/wave": ("audio", "wav"),
+    "audio/x-wav": ("audio", "wav"),
+    "audio/m4a": ("audio", "m4a"),
+    "audio/mp4": ("audio", "m4a"),
+    "audio/aac": ("audio", "aac"),
+    "audio/webm": ("audio", "webm"),
+    "audio/webm;codecs=opus": ("audio", "webm"),
+    "audio/ogg;codecs=opus": ("audio", "ogg"),
+    # Documents
+    "application/pdf": ("document", "pdf"),
+    "application/msword": ("document", "doc"),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ("document", "docx"),
+    "application/vnd.ms-excel": ("document", "xls"),
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ("document", "xlsx"),
+    "text/plain": ("document", "txt"),
+    "application/zip": ("document", "zip"),
+    "application/x-rar-compressed": ("document", "rar"),
+    "application/x-zip-compressed": ("document", "zip"),
+    "application/octet-stream": ("document", "bin"),
 }
 
 MAX_SIZE = 50 * 1024 * 1024  # 50 MB
@@ -58,25 +82,20 @@ def verify_token(token):
     return row[0] if row else None
 
 
-def detect_category(mime_type):
-    for cat, types in ALLOWED_TYPES.items():
-        if mime_type in types:
-            return cat
-    return None
-
-
-def get_ext(mime_type):
-    ext_map = {
-        "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
-        "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov",
-        "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/wav": "wav", "audio/m4a": "m4a", "audio/mp4": "m4a",
-        "application/pdf": "pdf", "text/plain": "txt", "application/zip": "zip",
-    }
-    return ext_map.get(mime_type, "bin")
+def normalize_mime(mime_type: str) -> str:
+    """Нормализует mime-тип, убирая параметры (codecs=...) для поиска в словаре."""
+    if not mime_type:
+        return "application/octet-stream"
+    # Сначала пробуем точное совпадение (включая codecs)
+    if mime_type in ALLOWED_MIME:
+        return mime_type
+    # Потом базовый тип без параметров
+    base = mime_type.split(";")[0].strip().lower()
+    return base
 
 
 def handler(event: dict, context) -> dict:
-    """Загрузка файлов (аватар, медиа в чат) в S3 хранилище."""
+    """Загрузка файлов (аватар, медиа, голосовые, видеокружочки) в S3 хранилище."""
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": CORS, "body": ""}
 
@@ -86,27 +105,37 @@ def handler(event: dict, context) -> dict:
         return {"statusCode": 401, "headers": CORS, "body": json.dumps({"error": "Unauthorized"})}
 
     body = json.loads(event.get("body") or "{}")
-    upload_type = body.get("type", "media")  # "avatar" | "media"
-    mime_type = body.get("mime", "image/jpeg")
+    upload_type = body.get("type", "media")
+    raw_mime = body.get("mime", "application/octet-stream")
     file_b64 = body.get("data", "")
     file_name = body.get("name", "file")
 
     if not file_b64:
         return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "No file data"})}
 
-    file_bytes = base64.b64decode(file_b64)
+    # Decode base64 — handle both with and without data URI prefix
+    try:
+        if "," in file_b64 and file_b64.startswith("data:"):
+            file_b64 = file_b64.split(",", 1)[1]
+        file_bytes = base64.b64decode(file_b64)
+    except Exception as e:
+        return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": f"Invalid base64: {e}"})}
+
     if len(file_bytes) > MAX_SIZE:
         return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "File too large (max 50MB)"})}
 
     s3 = get_s3()
     cdn_base = get_cdn_base()
 
+    # ── Avatar ──────────────────────────────────────────────────────────────────
     if upload_type == "avatar":
-        if mime_type not in ALLOWED_TYPES["image"]:
+        mime = normalize_mime(raw_mime)
+        info = ALLOWED_MIME.get(mime)
+        if not info or info[0] != "image":
             return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "Only images allowed for avatar"})}
-        ext = get_ext(mime_type)
+        ext = info[1]
         key = f"avatars/{user_id}/{uuid.uuid4().hex}.{ext}"
-        s3.put_object(Bucket="files", Key=key, Body=file_bytes, ContentType=mime_type)
+        s3.put_object(Bucket="files", Key=key, Body=file_bytes, ContentType=mime)
         url = f"{cdn_base}/files/{key}"
         conn = get_conn()
         cur = conn.cursor()
@@ -115,21 +144,75 @@ def handler(event: dict, context) -> dict:
         conn.close()
         return {"statusCode": 200, "headers": CORS, "body": json.dumps({"url": url})}
 
+    # ── Voice message ───────────────────────────────────────────────────────────
+    if upload_type == "voice":
+        # Browsers record as audio/webm, audio/ogg, etc.
+        mime = normalize_mime(raw_mime)
+        # If mime not recognized as audio, force to audio/webm
+        info = ALLOWED_MIME.get(mime)
+        if not info or info[0] != "audio":
+            mime = "audio/webm"
+            info = ("audio", "webm")
+        ext = info[1]
+        key = f"voice/{user_id}/{uuid.uuid4().hex}.{ext}"
+        s3.put_object(Bucket="files", Key=key, Body=file_bytes, ContentType=mime)
+        url = f"{cdn_base}/files/{key}"
+        return {"statusCode": 200, "headers": CORS, "body": json.dumps({
+            "url": url, "category": "voice", "name": file_name,
+            "size": len(file_bytes), "mime": mime,
+        })}
+
+    # ── Video note (кружочек) ────────────────────────────────────────────────────
+    if upload_type == "video_note":
+        mime = normalize_mime(raw_mime)
+        info = ALLOWED_MIME.get(mime)
+        if not info or info[0] != "video":
+            mime = "video/webm"
+            info = ("video", "webm")
+        ext = info[1]
+        key = f"video_notes/{user_id}/{uuid.uuid4().hex}.{ext}"
+        s3.put_object(Bucket="files", Key=key, Body=file_bytes, ContentType=mime)
+        url = f"{cdn_base}/files/{key}"
+        return {"statusCode": 200, "headers": CORS, "body": json.dumps({
+            "url": url, "category": "video_note", "name": file_name,
+            "size": len(file_bytes), "mime": mime,
+        })}
+
+    # ── General media ────────────────────────────────────────────────────────────
     if upload_type == "media":
-        category = detect_category(mime_type)
-        if not category:
-            return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "Unsupported file type"})}
-        ext = get_ext(mime_type)
+        mime = normalize_mime(raw_mime)
+        info = ALLOWED_MIME.get(mime)
+        if not info:
+            # Fallback: try to guess from file extension
+            ext_from_name = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+            ext_to_mime = {
+                "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                "gif": "image/gif", "webp": "image/webp",
+                "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
+                "mp3": "audio/mpeg", "ogg": "audio/ogg", "wav": "audio/wav",
+                "m4a": "audio/m4a", "aac": "audio/aac",
+                "pdf": "application/pdf", "txt": "text/plain",
+                "zip": "application/zip", "doc": "application/msword",
+            }
+            if ext_from_name in ext_to_mime:
+                mime = ext_to_mime[ext_from_name]
+                info = ALLOWED_MIME.get(mime)
+        if not info:
+            # Last resort: use as document
+            info = ("document", "bin")
+            mime = "application/octet-stream"
+
+        category, ext = info
         safe_name = uuid.uuid4().hex
         key = f"media/{user_id}/{category}/{safe_name}.{ext}"
-        s3.put_object(Bucket="files", Key=key, Body=file_bytes, ContentType=mime_type)
+        s3.put_object(Bucket="files", Key=key, Body=file_bytes, ContentType=mime)
         url = f"{cdn_base}/files/{key}"
         return {"statusCode": 200, "headers": CORS, "body": json.dumps({
             "url": url,
             "category": category,
             "name": file_name,
             "size": len(file_bytes),
-            "mime": mime_type,
+            "mime": mime,
         })}
 
-    return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "Unknown type"})}
+    return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": f"Unknown upload type: {upload_type}"})}

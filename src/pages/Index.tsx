@@ -475,33 +475,41 @@ function IndexApp() {
       ...(replyId ? { reply_to_id: replyId } : {}),
       ...(overrides || {}),
     };
-    const { ok, data } = await apiFetch(MESSAGES_URL, { method: "POST", body: JSON.stringify(payload) });
-
-    if (ok && data.message) {
-      // Заменяем оптимистичное сообщение реальным
-      setMessages(prev => prev.map(m => m.id === optimisticId ? { ...data.message, out: true } : m));
-    } else {
-      // Убираем оптимистичное при ошибке
-      setMessages(prev => prev.filter(m => m.id !== optimisticId));
+    let ok = false, data: Record<string, unknown> = {};
+    try {
+      const res = await apiFetch(MESSAGES_URL, { method: "POST", body: JSON.stringify(payload) });
+      ok = res.ok; data = res.data;
+    } catch {
+      toast("Нет соединения с сервером", "error");
     }
 
-    // Обновляем список чатов в фоне (не ждём)
+    if (ok && data.message) {
+      setMessages(prev => prev.map(m => m.id === optimisticId ? { ...(data.message as Message), out: true } : m));
+    } else {
+      setMessages(prev => prev.filter(m => m.id !== optimisticId));
+      if (!ok) toast(String(data?.error || "Ошибка отправки"), "error");
+    }
+
     loadChats();
     setSending(false);
   };
 
-  const handleFileUpload = async (file: File, type: string) => {
+  const handleFileUpload = async (file: File, msgType: string) => {
     if (!activeChat) return;
     setShowAttach(false); setUploadingMedia(true);
+    // Для всех типов кроме avatar используем тип "media" на бэкенде
+    // msg_type на фронте (image/video/audio/document) ≠ upload_type на бэкенде
+    const uploadType = "media";
+    const mime = file.type || "application/octet-stream";
     const b64 = await fileToBase64(file);
     const { ok, data } = await apiFetch(UPLOAD_URL, {
       method: "POST",
-      body: JSON.stringify({ type, mime: file.type, data: b64, name: file.name }),
+      body: JSON.stringify({ type: uploadType, mime, data: b64, name: file.name }),
     });
     if (ok) {
-      await sendMessage({ msg_type: type, media_url: data.url, media_name: file.name, media_size: file.size, text: "" });
+      await sendMessage({ msg_type: msgType, media_url: data.url, media_name: file.name, media_size: file.size, text: "" });
     } else {
-      toast("Ошибка загрузки файла", "error");
+      toast(`Ошибка загрузки: ${data?.error || "неподдерживаемый формат"}`, "error");
     }
     setUploadingMedia(false);
   };
@@ -616,21 +624,32 @@ function IndexApp() {
     reader.readAsDataURL(blob);
   });
 
+  // Нормализует mime: убирает codecs-суффикс, выбирает разумный fallback
+  const normalizeMime = (raw: string, fallback: string) => {
+    if (!raw) return fallback;
+    const base = raw.split(";")[0].trim().toLowerCase();
+    return base || fallback;
+  };
+
   const sendVoiceMessage = async (blob: Blob, duration: number) => {
     if (!activeChat) return;
     setShowVoiceRecorder(false);
     setUploadingMedia(true);
     toast("Отправляю голосовое...", "info");
+    const mime = normalizeMime(blob.type, "audio/webm");
+    const ext = mime.includes("ogg") ? "ogg" : mime.includes("mp4") || mime.includes("m4a") ? "m4a" : "webm";
     const b64 = await blobToBase64(blob);
     const { ok, data } = await apiFetch(UPLOAD_URL, {
       method: "POST",
-      body: JSON.stringify({ type: "voice", mime: blob.type || "audio/webm", data: b64, name: `voice_${Date.now()}.webm` }),
+      body: JSON.stringify({ type: "voice", mime, data: b64, name: `voice_${Date.now()}.${ext}` }),
     });
     if (ok) {
-      await sendMessage({ msg_type: "voice", media_url: data.url, media_name: "Голосовое", media_size: blob.size, text: "",
-        ...(({ media_duration: duration } as unknown) as Partial<Message>) });
+      await sendMessage({
+        msg_type: "voice", media_url: data.url, media_name: "Голосовое", media_size: blob.size, text: "",
+        ...({ media_duration: duration } as unknown as Partial<Message>),
+      });
     } else {
-      toast("Ошибка отправки голосового", "error");
+      toast(`Ошибка отправки: ${data?.error || "сервер недоступен"}`, "error");
     }
     setUploadingMedia(false);
   };
@@ -640,16 +659,19 @@ function IndexApp() {
     setShowVideoNoteRecorder(false);
     setUploadingMedia(true);
     toast("Отправляю видеосообщение...", "info");
+    const mime = normalizeMime(blob.type, "video/webm");
     const b64 = await blobToBase64(blob);
     const { ok, data } = await apiFetch(UPLOAD_URL, {
       method: "POST",
-      body: JSON.stringify({ type: "video_note", mime: "video/webm", data: b64, name: `videonote_${Date.now()}.webm` }),
+      body: JSON.stringify({ type: "video_note", mime, data: b64, name: `videonote_${Date.now()}.webm` }),
     });
     if (ok) {
-      await sendMessage({ msg_type: "video_note", media_url: data.url, text: "",
-        ...(({ media_duration: duration } as unknown) as Partial<Message>) });
+      await sendMessage({
+        msg_type: "video_note", media_url: data.url, text: "",
+        ...({ media_duration: duration } as unknown as Partial<Message>),
+      });
     } else {
-      toast("Ошибка отправки видеосообщения", "error");
+      toast(`Ошибка отправки: ${data?.error || "сервер недоступен"}`, "error");
     }
     setUploadingMedia(false);
   };
