@@ -79,6 +79,7 @@ def row_to_msg(r, me_id, reactions_map=None):
         "reply_to_id": r[14],
         "edited_at": fmt_time(r[15]),
         "is_removed": bool(r[16]) if r[16] is not None else False,
+        "forwarded_from_id": r[17] if len(r) > 17 else None,
         "reactions": reactions_map.get(msg_id, []) if reactions_map else [],
     }
 
@@ -166,7 +167,7 @@ def handler(event: dict, context) -> dict:
                            m.created_at,
                            m.msg_type, m.media_url, m.media_name, m.media_size, m.media_duration,
                            m.geo_lat, m.geo_lon, m.contact_name, m.contact_phone, m.reply_to_id,
-                           m.edited_at, m.is_removed
+                           m.edited_at, m.is_removed, m.forwarded_from_id
                     FROM {SCHEMA}.messages m
                     WHERE m.chat_id = %s AND m.id > %s
                     ORDER BY m.created_at ASC
@@ -178,7 +179,7 @@ def handler(event: dict, context) -> dict:
                            m.created_at,
                            m.msg_type, m.media_url, m.media_name, m.media_size, m.media_duration,
                            m.geo_lat, m.geo_lon, m.contact_name, m.contact_phone, m.reply_to_id,
-                           m.edited_at, m.is_removed
+                           m.edited_at, m.is_removed, m.forwarded_from_id
                     FROM {SCHEMA}.messages m
                     WHERE m.chat_id = %s
                     ORDER BY m.created_at ASC
@@ -319,6 +320,54 @@ def handler(event: dict, context) -> dict:
                     conn.commit()
                     cur.close()
                     return ok({"ok": True, "removed": False})
+
+            if action == "forward":
+                # Пересылка сообщения в тот же или другой чат
+                src_msg_id = body.get("message_id")
+                dst_chat_id = body.get("chat_id")
+                if not src_msg_id or not dst_chat_id:
+                    return err(400, "message_id и chat_id обязательны")
+                cur = conn.cursor()
+                # Проверяем доступ к чату-назначению
+                cur.execute(f"SELECT 1 FROM {SCHEMA}.chat_members WHERE chat_id = %s AND user_id = %s", (dst_chat_id, user["id"]))
+                if not cur.fetchone():
+                    cur.close()
+                    return err(403, "Нет доступа к чату")
+                # Получаем оригинальное сообщение
+                cur.execute(f"""
+                    SELECT text, msg_type, media_url, media_name, media_size, media_duration,
+                           geo_lat, geo_lon, contact_name, contact_phone, sender_id
+                    FROM {SCHEMA}.messages WHERE id = %s AND is_removed = FALSE
+                """, (src_msg_id,))
+                orig = cur.fetchone()
+                if not orig:
+                    cur.close()
+                    return err(404, "Исходное сообщение не найдено")
+                # Вставляем копию в чат назначения
+                cur.execute(f"""
+                    INSERT INTO {SCHEMA}.messages
+                      (chat_id, sender_id, text, status, msg_type, media_url, media_name,
+                       media_size, media_duration, geo_lat, geo_lon, contact_name, contact_phone,
+                       forwarded_from_id)
+                    VALUES (%s, %s, %s, 'sent', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, created_at
+                """, (dst_chat_id, user["id"], orig[0], orig[1], orig[2], orig[3], orig[4],
+                      orig[5], orig[6], orig[7], orig[8], orig[9], orig[10]))
+                row = cur.fetchone()
+                conn.commit()
+                cur.close()
+                return ok({
+                    "message": {
+                        "id": row[0], "sender_id": user["id"], "text": orig[0] or "",
+                        "status": "sent", "time": fmt_time(row[1]), "out": True,
+                        "msg_type": orig[1] or "text", "media_url": orig[2], "media_name": orig[3],
+                        "media_size": orig[4], "media_duration": orig[5],
+                        "geo_lat": orig[6], "geo_lon": orig[7],
+                        "contact_name": orig[8], "contact_phone": orig[9],
+                        "forwarded_from_id": orig[10],
+                        "reply_to_id": None, "edited_at": None, "is_removed": False, "reactions": [],
+                    }
+                })
 
             if action == "typing":
                 chat_id = body.get("chat_id")
