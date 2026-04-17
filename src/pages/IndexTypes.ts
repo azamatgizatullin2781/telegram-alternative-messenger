@@ -233,6 +233,22 @@ export const I18N: Record<string, Record<string, string>> = {
     deleted_msg: "Хабарлама жойылды", typing: "жазуда...",
     call_history_empty: "Қоңырау тарихы жоқ",
   },
+  uk: {
+    chats: "Чати", channels: "Канали", bots: "Боти", calls: "Дзвінки",
+    contacts: "Контакти", settings: "Налаштування", profile: "Профіль",
+    search_chats: "Пошук чатів...", search_people: "Пошук за іменем або @username...",
+    people: "Люди", no_chats: "Немає чатів. Перейдіть до Контактів.",
+    find_people: "Знайти співрозмовника", online: "Онлайн", offline: "Не в мережі",
+    type_message: "Повідомлення...", send: "Надіслати", logout: "Вийти",
+    name: "Ім'я", username: "Логін", encryption: "Шифрування",
+    appearance: "Оформлення", notifications_tab: "Сповіщення",
+    devices: "Пристрої", language: "Мова",
+    edit_profile: "Редагувати профіль", save: "Зберегти", cancel: "Скасувати",
+    display_name: "Відображувана назва", username_hint: "a-z, 0-9 та _ (3–32 символи)",
+    profile_saved: "Профіль збережено!", no_messages: "Немає повідомлень",
+    deleted_msg: "Повідомлення видалено", typing: "пише...",
+    call_history_empty: "Історія дзвінків порожня",
+  },
 };
 
 export function useT(lang: string) {
@@ -246,16 +262,21 @@ export const LANGUAGES = [
   { code: "de", label: "Deutsch", flag: "🇩🇪" },
   { code: "fr", label: "Français", flag: "🇫🇷" },
   { code: "es", label: "Español", flag: "🇪🇸" },
+  { code: "zh", label: "中文", flag: "🇨🇳" },
+  { code: "ar", label: "العربية", flag: "🇸🇦" },
   { code: "tr", label: "Türkçe", flag: "🇹🇷" },
   { code: "kk", label: "Қазақша", flag: "🇰🇿" },
+  { code: "uk", label: "Українська", flag: "🇺🇦" },
 ];
 export const REGIONS = [
   { code: "RU", label: "Россия", flag: "🇷🇺" },
   { code: "KZ", label: "Казахстан", flag: "🇰🇿" },
   { code: "BY", label: "Беларусь", flag: "🇧🇾" },
+  { code: "UA", label: "Украина", flag: "🇺🇦" },
   { code: "US", label: "США", flag: "🇺🇸" },
   { code: "DE", label: "Германия", flag: "🇩🇪" },
   { code: "GB", label: "Великобритания", flag: "🇬🇧" },
   { code: "TR", label: "Турция", flag: "🇹🇷" },
+  { code: "CN", label: "Китай", flag: "🇨🇳" },
   { code: "OTHER", label: "Другой", flag: "🌐" },
 ];
