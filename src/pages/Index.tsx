@@ -87,51 +87,10 @@ function IndexApp() {
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [editInput, setEditInput] = useState("");
   const [msgContextMenu, setMsgContextMenu] = useState<{msg: Message; x: number; y: number} | null>(null);
-  const [confirmDeleteMsgId, setConfirmDeleteMsgId] = useState<number | null>(null);
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
   const [showVideoNoteRecorder, setShowVideoNoteRecorder] = useState(false);
   const [viewingProfile, setViewingProfile] = useState<User | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
-  const [editingSaving, setEditingSaving] = useState(false);
-
-  // ─── Archive (localStorage) ────────────────────────────────────────────────
-  const [archivedChats, setArchivedChats] = useState<number[]>(() => {
-    try { return JSON.parse(localStorage.getItem("wc_archived_chats") || "[]"); } catch { return []; }
-  });
-  const [archivedChannels, setArchivedChannels] = useState<number[]>(() => {
-    try { return JSON.parse(localStorage.getItem("wc_archived_channels") || "[]"); } catch { return []; }
-  });
-  const [archivedBots, setArchivedBots] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem("wc_archived_bots") || "[]"); } catch { return []; }
-  });
-  const [showArchiveChats, setShowArchiveChats] = useState(false);
-  const [showArchiveChannels, setShowArchiveChannels] = useState(false);
-  const [showArchiveBots, setShowArchiveBots] = useState(false);
-
-  const toggleArchiveChat = (chatId: number) => {
-    setArchivedChats(prev => {
-      const next = prev.includes(chatId) ? prev.filter(id => id !== chatId) : [...prev, chatId];
-      localStorage.setItem("wc_archived_chats", JSON.stringify(next));
-      return next;
-    });
-  };
-  const toggleArchiveChannel = (channelId: number) => {
-    setArchivedChannels(prev => {
-      const next = prev.includes(channelId) ? prev.filter(id => id !== channelId) : [...prev, channelId];
-      localStorage.setItem("wc_archived_channels", JSON.stringify(next));
-      return next;
-    });
-  };
-  const toggleArchiveBot = (botId: string) => {
-    setArchivedBots(prev => {
-      const next = prev.includes(botId) ? prev.filter(id => id !== botId) : [...prev, botId];
-      localStorage.setItem("wc_archived_bots", JSON.stringify(next));
-      return next;
-    });
-  };
-
-  // Контекстное меню чата (правый клик / долгое нажатие)
-  const [chatContextMenu, setChatContextMenu] = useState<{chatId: number; x: number; y: number} | null>(null);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -635,30 +594,25 @@ function IndexApp() {
   };
 
   const editMessage = async (msgId: number, newText: string) => {
-    const trimmed = newText.trim();
-    if (!trimmed || editingSaving) return;
-    setEditingSaving(true);
     const { ok, data } = await apiFetch(MESSAGES_URL, {
-      method: "POST", body: JSON.stringify({ action: "edit", message_id: msgId, text: trimmed }),
+      method: "POST", body: JSON.stringify({ action: "edit", message_id: msgId, text: newText }),
     });
-    setEditingSaving(false);
     if (ok) {
-      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, text: data.text as string, edited_at: data.edited_at as string } : m));
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, text: data.text, edited_at: data.edited_at } : m));
       setEditingMessage(null); setEditInput("");
       toast("Сообщение изменено", "success");
     } else {
-      toast((data?.error as string) || "Ошибка редактирования", "error");
+      toast("Ошибка редактирования", "error");
     }
   };
 
   const removeMessage = async (msgId: number) => {
-    setConfirmDeleteMsgId(null);
-    setMsgContextMenu(null);
     const { ok } = await apiFetch(MESSAGES_URL, {
       method: "POST", body: JSON.stringify({ action: "remove", message_id: msgId }),
     });
     if (ok) {
       setMessages(prev => prev.map(m => m.id === msgId ? { ...m, is_removed: true, text: "" } : m));
+      setMsgContextMenu(null);
       toast("Сообщение удалено", "info");
     } else {
       toast("Ошибка удаления", "error");
@@ -666,52 +620,22 @@ function IndexApp() {
   };
 
   const reactToMessage = async (msgId: number, emoji: string) => {
-    // Оптимистичное обновление
-    setMessages(prev => prev.map(m => {
-      if (m.id !== msgId) return m;
-      const existing = (m.reactions || []).filter(r => r.emoji && r.emoji !== "");
-      const myReaction = existing.find(r => r.user_id === user!.id);
-      if (myReaction) {
-        if (myReaction.emoji === emoji) {
-          // Снять реакцию
-          return { ...m, reactions: existing.filter(r => r.user_id !== user!.id) };
-        } else {
-          // Сменить реакцию
-          return { ...m, reactions: [...existing.filter(r => r.user_id !== user!.id), { emoji, user_id: user!.id, display_name: user!.display_name }] };
-        }
-      }
-      return { ...m, reactions: [...existing, { emoji, user_id: user!.id, display_name: user!.display_name }] };
-    }));
-    setMsgContextMenu(null);
     const { ok } = await apiFetch(MESSAGES_URL, {
       method: "POST", body: JSON.stringify({ action: "react", message_id: msgId, emoji }),
     });
-    if (!ok) {
-      // Откат при ошибке
+    if (ok) {
       setMessages(prev => prev.map(m => {
         if (m.id !== msgId) return m;
-        const existing = (m.reactions || []).filter(r => r.emoji && r.emoji !== "");
+        const existing = m.reactions || [];
         const myReaction = existing.find(r => r.user_id === user!.id);
-        if (myReaction?.emoji === emoji) return { ...m, reactions: existing.filter(r => r.user_id !== user!.id) };
-        return { ...m, reactions: [...existing.filter(r => r.user_id !== user!.id)] };
+        if (myReaction && myReaction.emoji === emoji) {
+          return { ...m, reactions: existing.filter(r => r.user_id !== user!.id) };
+        }
+        const without = existing.filter(r => r.user_id !== user!.id);
+        return { ...m, reactions: [...without, { emoji, user_id: user!.id, display_name: user!.display_name }] };
       }));
-      toast("Ошибка реакции", "error");
     }
-  };
-
-  const forwardMessage = async (msgId: number) => {
-    if (!activeChat) return;
     setMsgContextMenu(null);
-    const { ok, data } = await apiFetch(MESSAGES_URL, {
-      method: "POST", body: JSON.stringify({ action: "forward", message_id: msgId, chat_id: activeChat.chat_id }),
-    });
-    if (ok && data.message) {
-      setMessages(prev => [...prev, { ...(data.message as Message), out: true }]);
-      loadChats();
-      toast("Сообщение переслано", "success");
-    } else {
-      toast((data?.error as string) || "Ошибка пересылки", "error");
-    }
   };
 
   const blobToBase64 = (blob: Blob): Promise<string> => new Promise((res, rej) => {
@@ -1060,110 +984,53 @@ function IndexApp() {
             </div>
           )}
 
-          {/* Chat context menu */}
-          {chatContextMenu && (
-            <div className="fixed inset-0 z-50" onClick={() => setChatContextMenu(null)}>
-              <div className="absolute bg-card border border-border rounded-2xl shadow-xl py-1 min-w-[160px]"
-                style={{ top: Math.min(chatContextMenu.y, window.innerHeight - 120), left: Math.max(4, Math.min(chatContextMenu.x, window.innerWidth - 168)) }}
-                onClick={e => e.stopPropagation()}>
-                <button onClick={() => { toggleArchiveChat(chatContextMenu.chatId); setChatContextMenu(null); toast(archivedChats.includes(chatContextMenu.chatId) ? "Чат разархивирован" : "Чат архивирован", "success"); }}
-                  className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left transition-colors">
-                  <Icon name={archivedChats.includes(chatContextMenu.chatId) ? "ArchiveRestore" : "Archive"} size={14} className="text-muted-foreground" />
-                  {archivedChats.includes(chatContextMenu.chatId) ? "Разархивировать" : "Архивировать"}
+          {/* CHATS */}
+          {section === "chats" && chatSearchTab === "chats" && (
+            <div>
+              {chatsLoading && chats.length === 0 && (
+                <div className="flex justify-center py-8">
+                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+              {!chatsLoading && chats.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground px-4 text-center">
+                  <Icon name="MessageSquare" size={36} className="opacity-20" />
+                  <p className="text-sm">Нет чатов. Перейдите в «Контакты».</p>
+                  <button onClick={() => setSection("contacts")}
+                    className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-medium">
+                    Найти собеседника
+                  </button>
+                </div>
+              )}
+              {searchQuery && filteredChats.length === 0 && chats.length > 0 && (
+                <div className="text-center py-8 text-muted-foreground text-sm">Чаты не найдены</div>
+              )}
+              {filteredChats.map((c, i) => (
+                <button key={c.chat_id} onClick={() => openChat(c)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/60 transition-colors text-left animate-fade-in
+                    ${activeChat?.chat_id === c.chat_id ? "bg-primary/[0.07] border-r-2 border-primary" : ""}`}
+                  style={{ animationDelay: `${i * 25}ms` }}>
+                  <Avatar user={c.partner} size={44} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium truncate">{c.partner.display_name}</span>
+                      <span className="text-xs text-muted-foreground shrink-0 ml-2">{c.last_time}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-0.5">
+                      <span className="text-xs text-muted-foreground truncate">
+                        {c.last_text ? (c.last_sender_id === user.id ? `Вы: ${c.last_text}` : c.last_text) : "Нет сообщений"}
+                      </span>
+                      {c.unread > 0 && (
+                        <span className="ml-2 shrink-0 min-w-5 h-5 px-1.5 bg-primary text-white text-xs rounded-full flex items-center justify-center font-medium">
+                          {c.unread}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </button>
-              </div>
+              ))}
             </div>
           )}
-
-          {/* CHATS */}
-          {section === "chats" && chatSearchTab === "chats" && (() => {
-            const visibleChats = showArchiveChats
-              ? filteredChats.filter(c => archivedChats.includes(c.chat_id))
-              : filteredChats.filter(c => !archivedChats.includes(c.chat_id));
-            const archivedCount = chats.filter(c => archivedChats.includes(c.chat_id)).length;
-
-            return (
-              <div>
-                {chatsLoading && chats.length === 0 && (
-                  <div className="flex justify-center py-8">
-                    <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  </div>
-                )}
-                {!chatsLoading && chats.length === 0 && (
-                  <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground px-4 text-center">
-                    <Icon name="MessageSquare" size={36} className="opacity-20" />
-                    <p className="text-sm">Нет чатов. Перейдите в «Контакты».</p>
-                    <button onClick={() => setSection("contacts")}
-                      className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-medium">
-                      Найти собеседника
-                    </button>
-                  </div>
-                )}
-
-                {/* Archive toggle banner */}
-                {!searchQuery && archivedCount > 0 && !showArchiveChats && (
-                  <button onClick={() => setShowArchiveChats(true)}
-                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/60 transition-colors text-left border-b border-border/50">
-                    <div className="w-11 h-11 rounded-full bg-muted flex items-center justify-center shrink-0">
-                      <Icon name="Archive" size={20} className="text-muted-foreground" />
-                    </div>
-                    <div className="flex-1">
-                      <span className="text-sm font-medium">Архив</span>
-                      <div className="text-xs text-muted-foreground">{archivedCount} {archivedCount === 1 ? "чат" : archivedCount < 5 ? "чата" : "чатов"}</div>
-                    </div>
-                    <Icon name="ChevronRight" size={14} className="text-muted-foreground" />
-                  </button>
-                )}
-
-                {/* Back from archive */}
-                {showArchiveChats && (
-                  <button onClick={() => setShowArchiveChats(false)}
-                    className="w-full flex items-center gap-2 px-4 py-2.5 bg-primary/5 border-b border-border/50 text-primary text-sm font-medium hover:bg-primary/10 transition-colors">
-                    <Icon name="ArrowLeft" size={14} />Назад к чатам
-                  </button>
-                )}
-
-                {searchQuery && visibleChats.length === 0 && chats.length > 0 && (
-                  <div className="text-center py-8 text-muted-foreground text-sm">Чаты не найдены</div>
-                )}
-                {!searchQuery && !showArchiveChats && visibleChats.length === 0 && chats.length === archivedCount && chats.length > 0 && (
-                  <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground text-center px-4">
-                    <Icon name="ArchiveRestore" size={32} className="opacity-20" />
-                    <p className="text-sm">Все чаты в архиве</p>
-                  </div>
-                )}
-
-                {visibleChats.map((c, i) => (
-                  <button key={c.chat_id} onClick={() => openChat(c)}
-                    onContextMenu={e => { e.preventDefault(); setChatContextMenu({ chatId: c.chat_id, x: e.clientX, y: e.clientY }); }}
-                    className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/60 transition-colors text-left animate-fade-in
-                      ${activeChat?.chat_id === c.chat_id ? "bg-primary/[0.07] border-r-2 border-primary" : ""}`}
-                    style={{ animationDelay: `${i * 25}ms` }}>
-                    <Avatar user={c.partner} size={44} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium truncate">{c.partner.display_name}</span>
-                        <span className="text-xs text-muted-foreground shrink-0 ml-2">{c.last_time}</span>
-                      </div>
-                      <div className="flex items-center justify-between mt-0.5">
-                        <span className="text-xs text-muted-foreground truncate">
-                          {c.last_text ? (c.last_sender_id === user.id ? `Вы: ${c.last_text}` : c.last_text) : "Нет сообщений"}
-                        </span>
-                        <div className="flex items-center gap-1 shrink-0 ml-1">
-                          {showArchiveChats && <Icon name="Archive" size={10} className="text-muted-foreground" />}
-                          {c.unread > 0 && !showArchiveChats && (
-                            <span className="min-w-5 h-5 px-1.5 bg-primary text-white text-xs rounded-full flex items-center justify-center font-medium">
-                              {c.unread}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            );
-          })()}
 
           {/* PEOPLE SEARCH */}
           {section === "chats" && chatSearchTab === "people" && (
@@ -1272,182 +1139,114 @@ function IndexApp() {
           )}
 
           {/* CHANNELS */}
-          {section === "channels" && (() => {
-            const baseList = channelTab === "search" ? channelSearchResults : channels;
-            const visibleChannels = showArchiveChannels
-              ? baseList.filter(ch => archivedChannels.includes(ch.id))
-              : baseList.filter(ch => !archivedChannels.includes(ch.id));
-            const archivedChannelCount = channels.filter(ch => archivedChannels.includes(ch.id)).length;
-            return (
-              <div>
-                {/* Tabs */}
-                <div className="flex gap-1 px-4 py-2 border-b border-border">
-                  {([["all","Все"],["my","Мои"],["search","Поиск"]] as [string,string][]).map(([id,label]) => (
-                    <button key={id} onClick={() => { setChannelTab(id as "all"|"my"|"search"); setChannelSearchQuery(""); setChannelSearchResults([]); setShowArchiveChannels(false); }}
-                      className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all ${channelTab === id ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted"}`}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                {channelTab === "search" && (
-                  <div className="px-4 py-2">
-                    <div className="relative">
-                      <Icon name="Search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                      <input value={channelSearchQuery}
-                        onChange={e => { setChannelSearchQuery(e.target.value); searchChannels(e.target.value); }}
-                        placeholder="Название канала..."
-                        className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30"
-                        autoFocus />
-                    </div>
-                  </div>
-                )}
-
-                <div>
-                  {channelsLoading && <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}
-                  {channelSearchLoading && channelTab === "search" && <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}
-
-                  {/* Archive banner for channels */}
-                  {channelTab !== "search" && archivedChannelCount > 0 && !showArchiveChannels && (
-                    <button onClick={() => setShowArchiveChannels(true)}
-                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/60 transition-colors text-left border-b border-border/50">
-                      <div className="w-11 h-11 rounded-full bg-muted flex items-center justify-center shrink-0">
-                        <Icon name="Archive" size={20} className="text-muted-foreground" />
-                      </div>
-                      <div className="flex-1">
-                        <span className="text-sm font-medium">Архив каналов</span>
-                        <div className="text-xs text-muted-foreground">{archivedChannelCount} {archivedChannelCount === 1 ? "канал" : archivedChannelCount < 5 ? "канала" : "каналов"}</div>
-                      </div>
-                      <Icon name="ChevronRight" size={14} className="text-muted-foreground" />
-                    </button>
-                  )}
-                  {showArchiveChannels && (
-                    <button onClick={() => setShowArchiveChannels(false)}
-                      className="w-full flex items-center gap-2 px-4 py-2.5 bg-primary/5 border-b border-border/50 text-primary text-sm font-medium hover:bg-primary/10 transition-colors">
-                      <Icon name="ArrowLeft" size={14} />Назад к каналам
-                    </button>
-                  )}
-
-                  {(() => {
-                    if (!channelsLoading && !channelSearchLoading && visibleChannels.length === 0 && channelTab !== "search") {
-                      return (
-                        <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground text-center px-4">
-                          <Icon name={showArchiveChannels ? "Archive" : "Rss"} size={36} className="opacity-20" />
-                          <p className="text-sm">{showArchiveChannels ? "Архив пуст" : channelTab === "my" ? "У вас нет каналов" : "Каналов пока нет"}</p>
-                        </div>
-                      );
-                    }
-                    if (channelTab === "search" && channelSearchQuery && !channelSearchLoading && visibleChannels.length === 0) {
-                      return <div className="text-center py-8 text-muted-foreground text-sm">Ничего не найдено</div>;
-                    }
-                    if (channelTab === "search" && !channelSearchQuery) {
-                      return (
-                        <div className="flex flex-col items-center justify-center py-12 gap-2 text-muted-foreground text-center px-4">
-                          <Icon name="Search" size={36} className="opacity-20" />
-                          <p className="text-sm">Введите название канала</p>
-                        </div>
-                      );
-                    }
-                    return visibleChannels.map((ch, i) => (
-                      <button key={ch.id} onClick={() => openChannel(ch)}
-                        onContextMenu={e => { e.preventDefault(); toggleArchiveChannel(ch.id); toast(archivedChannels.includes(ch.id) ? "Канал разархивирован" : "Канал архивирован", "success"); }}
-                        className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/60 transition-colors text-left animate-fade-in
-                          ${activeChannel?.id === ch.id ? "bg-primary/[0.07] border-r-2 border-primary" : ""}`}
-                        style={{ animationDelay: `${i * 20}ms` }}>
-                        <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg shrink-0 overflow-hidden"
-                          style={{ background: ch.avatar_color }}>
-                          {ch.avatar_url ? <img src={ch.avatar_url} alt="" className="w-full h-full object-cover" /> : ch.name.slice(0,2).toUpperCase()}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1">
-                            <span className="text-sm font-medium truncate">{ch.name}</span>
-                            {!ch.is_public && <Icon name="Lock" size={11} className="text-muted-foreground shrink-0" />}
-                          </div>
-                          <div className="text-xs text-muted-foreground truncate">{ch.description || "Канал"}</div>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          {showArchiveChannels && <Icon name="Archive" size={11} className="text-muted-foreground" />}
-                          <span className="text-xs text-muted-foreground">{ch.members_count >= 1000 ? `${(ch.members_count/1000).toFixed(1)}K` : ch.members_count}</span>
-                        </div>
-                      </button>
-                    ));
-                  })()}
-                </div>
-
-                {!showArchiveChannels && (
-                  <div className="px-4 py-3 border-t border-border mt-2">
-                    <button onClick={() => setShowCreateChannel(true)}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border hover:bg-muted/60 transition-colors text-muted-foreground text-sm">
-                      <Icon name="Plus" size={16} />Создать канал
-                    </button>
-                  </div>
-                )}
+          {section === "channels" && (
+            <div>
+              {/* Tabs */}
+              <div className="flex gap-1 px-4 py-2 border-b border-border">
+                {([["all","Все"],["my","Мои"],["search","Поиск"]] as [string,string][]).map(([id,label]) => (
+                  <button key={id} onClick={() => { setChannelTab(id as "all"|"my"|"search"); setChannelSearchQuery(""); setChannelSearchResults([]); }}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all ${channelTab === id ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted"}`}>
+                    {label}
+                  </button>
+                ))}
               </div>
-            );
-          })()}
 
-          {/* BOTS list */}
-          {section === "bots" && !activeBotId && (() => {
-            const isBotArchived = archivedBots.includes("worchat_bot");
-            return (
-              <div className="px-4 py-2 space-y-1">
-                {/* Archive banner */}
-                {isBotArchived && !showArchiveBots && (
-                  <button onClick={() => setShowArchiveBots(true)}
-                    className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left">
-                    <div className="w-11 h-11 rounded-full bg-muted flex items-center justify-center shrink-0">
-                      <Icon name="Archive" size={20} className="text-muted-foreground" />
-                    </div>
-                    <div className="flex-1">
-                      <span className="text-sm font-medium">Архив ботов</span>
-                      <div className="text-xs text-muted-foreground">1 бот</div>
-                    </div>
-                    <Icon name="ChevronRight" size={14} className="text-muted-foreground" />
-                  </button>
-                )}
-                {showArchiveBots && (
-                  <button onClick={() => setShowArchiveBots(false)}
-                    className="w-full flex items-center gap-2 px-2 py-2 text-primary text-sm font-medium hover:bg-primary/10 rounded-xl transition-colors">
-                    <Icon name="ArrowLeft" size={14} />Назад к ботам
-                  </button>
-                )}
+              {/* Search input */}
+              {channelTab === "search" && (
+                <div className="px-4 py-2">
+                  <div className="relative">
+                    <Icon name="Search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input value={channelSearchQuery}
+                      onChange={e => { setChannelSearchQuery(e.target.value); searchChannels(e.target.value); }}
+                      placeholder="Название канала..."
+                      className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus />
+                  </div>
+                </div>
+              )}
 
-                {/* Bot item — показываем в зависимости от режима архива */}
-                {((showArchiveBots && isBotArchived) || (!showArchiveBots && !isBotArchived)) && (
-                  <div className="flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors group">
-                    <button onClick={() => setActiveBotId("worchat_bot")} className="flex items-center gap-3 flex-1 text-left min-w-0">
-                      <div className="w-11 h-11 rounded-full flex items-center justify-center text-white shrink-0 relative"
-                        style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
-                        <Icon name="Bot" size={22} />
-                        <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-green-400 border-2 border-white rounded-full" />
+              {/* Channel list */}
+              <div>
+                {channelsLoading && (
+                  <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+                )}
+                {channelSearchLoading && channelTab === "search" && (
+                  <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+                )}
+                {(() => {
+                  const list = channelTab === "search" ? channelSearchResults : channels;
+                  if (!channelsLoading && !channelSearchLoading && list.length === 0 && channelTab !== "search") {
+                    return (
+                      <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground text-center px-4">
+                        <Icon name="Rss" size={36} className="opacity-20" />
+                        <p className="text-sm">{channelTab === "my" ? "У вас нет каналов" : "Каналов пока нет"}</p>
+                      </div>
+                    );
+                  }
+                  if (channelTab === "search" && channelSearchQuery && !channelSearchLoading && channelSearchResults.length === 0) {
+                    return <div className="text-center py-8 text-muted-foreground text-sm">Ничего не найдено</div>;
+                  }
+                  if (channelTab === "search" && !channelSearchQuery) {
+                    return (
+                      <div className="flex flex-col items-center justify-center py-12 gap-2 text-muted-foreground text-center px-4">
+                        <Icon name="Search" size={36} className="opacity-20" />
+                        <p className="text-sm">Введите название канала</p>
+                      </div>
+                    );
+                  }
+                  return list.map((ch, i) => (
+                    <button key={ch.id} onClick={() => openChannel(ch)}
+                      className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/60 transition-colors text-left animate-fade-in
+                        ${activeChannel?.id === ch.id ? "bg-primary/[0.07] border-r-2 border-primary" : ""}`}
+                      style={{ animationDelay: `${i * 20}ms` }}>
+                      <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg shrink-0 overflow-hidden"
+                        style={{ background: ch.avatar_color }}>
+                        {ch.avatar_url ? <img src={ch.avatar_url} alt="" className="w-full h-full object-cover" /> : ch.name.slice(0,2).toUpperCase()}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold">WorChat Bot</span>
-                          <Badge plan="premium" />
-                          {isBotArchived && <Icon name="Archive" size={11} className="text-muted-foreground" />}
+                        <div className="flex items-center gap-1">
+                          <span className="text-sm font-medium truncate">{ch.name}</span>
+                          {!ch.is_public && <Icon name="Lock" size={11} className="text-muted-foreground shrink-0" />}
                         </div>
-                        <div className="text-xs text-muted-foreground">Подписки · Помощь · Поддержка</div>
+                        <div className="text-xs text-muted-foreground truncate">{ch.description || "Канал"}</div>
                       </div>
+                      <div className="text-xs text-muted-foreground shrink-0">{ch.members_count >= 1000 ? `${(ch.members_count/1000).toFixed(1)}K` : ch.members_count}</div>
                     </button>
-                    <button
-                      onClick={() => { toggleArchiveBot("worchat_bot"); setShowArchiveBots(false); toast(isBotArchived ? "Бот разархивирован" : "Бот архивирован", "success"); }}
-                      className="w-8 h-8 rounded-xl flex items-center justify-center hover:bg-muted opacity-0 group-hover:opacity-100 transition-all shrink-0"
-                      title={isBotArchived ? "Разархивировать" : "Архивировать"}>
-                      <Icon name={isBotArchived ? "ArchiveRestore" : "Archive"} size={14} className="text-muted-foreground" />
-                    </button>
-                  </div>
-                )}
-
-                {!isBotArchived && !showArchiveBots && (
-                  <div className="flex items-center justify-center py-6 text-xs text-muted-foreground gap-1">
-                    <Icon name="MousePointerClick" size={12} />
-                    <span>Долгое нажатие или ПКМ для архивирования</span>
-                  </div>
-                )}
+                  ));
+                })()}
               </div>
-            );
-          })()}
+
+              {/* Create button */}
+              <div className="px-4 py-3 border-t border-border mt-2">
+                <button onClick={() => setShowCreateChannel(true)}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border hover:bg-muted/60 transition-colors text-muted-foreground text-sm">
+                  <Icon name="Plus" size={16} />Создать канал
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* BOTS list */}
+          {section === "bots" && !activeBotId && (
+            <div className="px-4 py-2">
+              <button onClick={() => setActiveBotId("worchat_bot")}
+                className="w-full flex items-center gap-3 py-3 hover:bg-muted/60 rounded-xl px-2 transition-colors text-left">
+                <div className="w-11 h-11 rounded-full flex items-center justify-center text-white shrink-0 relative"
+                  style={{ background: "linear-gradient(135deg, #6366f1, #a855f7)" }}>
+                  <Icon name="Bot" size={22} />
+                  <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-green-400 border-2 border-white rounded-full" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold">WorChat Bot</span>
+                    <Badge plan="premium" />
+                  </div>
+                  <div className="text-xs text-muted-foreground">Подписки · Помощь · Поддержка</div>
+                </div>
+                <Icon name="ChevronRight" size={16} className="text-muted-foreground" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1475,10 +1274,6 @@ function IndexApp() {
                 <div className="text-xs text-muted-foreground">{activeChannel.members_count.toLocaleString()} подписчиков</div>
               </div>
               <div className="flex items-center gap-1">
-                <button onClick={() => { toggleArchiveChannel(activeChannel.id); toast(archivedChannels.includes(activeChannel.id) ? "Канал разархивирован" : "Канал архивирован", "success"); }}
-                  className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted transition-colors" title={archivedChannels.includes(activeChannel.id) ? "Разархивировать" : "Архивировать"}>
-                  <Icon name={archivedChannels.includes(activeChannel.id) ? "ArchiveRestore" : "Archive"} size={16} className="text-muted-foreground" />
-                </button>
                 {activeChannel.role === "owner" || activeChannel.role === "admin" ? (
                   <button onClick={() => setShowEditChannel(true)}
                     className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted transition-colors">
@@ -1701,12 +1496,7 @@ function IndexApp() {
                     <Icon name="MoreVertical" size={17} className="text-muted-foreground" />
                   </button>
                   {chatMenuOpen && (
-                    <div className="absolute right-0 top-10 w-52 bg-card border border-border rounded-2xl shadow-lg z-50 py-1 animate-pop">
-                      <button onClick={() => { toggleArchiveChat(activeChat.chat_id); setChatMenuOpen(false); toast(archivedChats.includes(activeChat.chat_id) ? "Чат разархивирован" : "Чат архивирован", "success"); }}
-                        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted transition-colors text-left">
-                        <Icon name={archivedChats.includes(activeChat.chat_id) ? "ArchiveRestore" : "Archive"} size={15} className="text-muted-foreground" />
-                        {archivedChats.includes(activeChat.chat_id) ? "Разархивировать" : "Архивировать чат"}
-                      </button>
+                    <div className="absolute right-0 top-10 w-48 bg-card border border-border rounded-2xl shadow-lg z-50 py-1 animate-pop">
                       <button onClick={clearChat}
                         className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted transition-colors text-left">
                         <Icon name="Eraser" size={15} className="text-muted-foreground" />Очистить переписку
@@ -1730,80 +1520,40 @@ function IndexApp() {
 
             {/* Context menu overlay */}
             {msgContextMenu && (
-              <div className="fixed inset-0 z-50" onClick={() => { setMsgContextMenu(null); setConfirmDeleteMsgId(null); }}>
-                <div className="absolute bg-card border border-border rounded-2xl shadow-xl py-1 min-w-[188px] z-50"
-                  style={{
-                    top: Math.min(msgContextMenu.y, window.innerHeight - 280),
-                    left: Math.max(4, Math.min(msgContextMenu.x, window.innerWidth - 196)),
-                  }}
+              <div className="fixed inset-0 z-50" onClick={() => setMsgContextMenu(null)}>
+                <div className="absolute bg-card border border-border rounded-2xl shadow-xl py-1 min-w-44 z-50"
+                  style={{ top: Math.min(msgContextMenu.y, window.innerHeight - 220), left: Math.min(msgContextMenu.x, window.innerWidth - 180) }}
                   onClick={e => e.stopPropagation()}>
                   {/* Quick reactions */}
-                  <div className="flex items-center justify-between px-2.5 py-2 border-b border-border">
-                    {["👍","❤️","😂","😮","😢","🔥"].map(emoji => {
-                      const hasMyReaction = msgContextMenu.msg.reactions?.find(r => r.user_id === user?.id && r.emoji === emoji);
-                      return (
-                        <button key={emoji} onClick={() => reactToMessage(msgContextMenu.msg.id, emoji)}
-                          className={`text-lg hover:scale-125 transition-transform rounded-lg p-0.5 ${hasMyReaction ? "bg-primary/15 scale-110" : ""}`}>
-                          {emoji}
-                        </button>
-                      );
-                    })}
+                  <div className="flex items-center gap-1 px-3 py-2 border-b border-border">
+                    {["👍","❤️","😂","😮","😢","🔥"].map(emoji => (
+                      <button key={emoji} onClick={() => reactToMessage(msgContextMenu.msg.id, emoji)}
+                        className={`text-xl hover:scale-125 transition-transform rounded-lg p-0.5 ${
+                          msgContextMenu.msg.reactions?.find(r => r.user_id === user?.id && r.emoji === emoji) ? "bg-primary/10" : ""
+                        }`}>
+                        {emoji}
+                      </button>
+                    ))}
                   </div>
-
-                  {/* Ответить */}
-                  {!msgContextMenu.msg.is_removed && (
-                    <button onClick={() => { setReplyTo(msgContextMenu.msg); setMsgContextMenu(null); setConfirmDeleteMsgId(null); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left transition-colors">
-                      <Icon name="Reply" size={14} className="text-muted-foreground" />Ответить
-                    </button>
-                  )}
-
-                  {/* Переслать */}
-                  {!msgContextMenu.msg.is_removed && (
-                    <button onClick={() => forwardMessage(msgContextMenu.msg.id)}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left transition-colors">
-                      <Icon name="Forward" size={14} className="text-muted-foreground" />Переслать
-                    </button>
-                  )}
-
-                  {/* Редактировать (только своё текстовое) */}
+                  <button onClick={() => { setReplyTo(msgContextMenu.msg); setMsgContextMenu(null); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left">
+                    <Icon name="Reply" size={14} className="text-muted-foreground" />Ответить
+                  </button>
                   {msgContextMenu.msg.out && !msgContextMenu.msg.is_removed && msgContextMenu.msg.msg_type === "text" && (
-                    <button onClick={() => { setEditingMessage(msgContextMenu.msg); setEditInput(msgContextMenu.msg.text); setMsgContextMenu(null); setConfirmDeleteMsgId(null); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left transition-colors">
+                    <button onClick={() => { setEditingMessage(msgContextMenu.msg); setEditInput(msgContextMenu.msg.text); setMsgContextMenu(null); }}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left">
                       <Icon name="Pencil" size={14} className="text-muted-foreground" />Редактировать
                     </button>
                   )}
-
-                  {/* Копировать */}
-                  {!msgContextMenu.msg.is_removed && msgContextMenu.msg.text && (
-                    <button onClick={() => { navigator.clipboard.writeText(msgContextMenu.msg.text); setMsgContextMenu(null); setConfirmDeleteMsgId(null); toast("Скопировано", "success"); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left transition-colors">
-                      <Icon name="Copy" size={14} className="text-muted-foreground" />Копировать
-                    </button>
-                  )}
-
-                  {/* Удалить с подтверждением */}
+                  <button onClick={() => { navigator.clipboard.writeText(msgContextMenu.msg.text); setMsgContextMenu(null); toast("Скопировано", "success"); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left">
+                    <Icon name="Copy" size={14} className="text-muted-foreground" />Копировать
+                  </button>
                   {msgContextMenu.msg.out && !msgContextMenu.msg.is_removed && (
-                    confirmDeleteMsgId === msgContextMenu.msg.id ? (
-                      <div className="px-3 py-2 border-t border-border">
-                        <p className="text-xs text-muted-foreground mb-2 text-center">Удалить сообщение?</p>
-                        <div className="flex gap-1.5">
-                          <button onClick={() => setConfirmDeleteMsgId(null)}
-                            className="flex-1 py-1.5 text-xs rounded-lg border border-border hover:bg-muted transition-colors">
-                            Нет
-                          </button>
-                          <button onClick={() => removeMessage(msgContextMenu.msg.id)}
-                            className="flex-1 py-1.5 text-xs rounded-lg bg-destructive text-white hover:bg-destructive/90 transition-colors font-medium">
-                            Удалить
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button onClick={() => setConfirmDeleteMsgId(msgContextMenu.msg.id)}
-                        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-destructive/10 text-destructive text-left transition-colors border-t border-border">
-                        <Icon name="Trash2" size={14} />Удалить
-                      </button>
-                    )
+                    <button onClick={() => removeMessage(msgContextMenu.msg.id)}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-destructive/10 text-destructive text-left">
+                      <Icon name="Trash2" size={14} />Удалить
+                    </button>
                   )}
                 </div>
               </div>
@@ -2053,10 +1803,10 @@ function IndexApp() {
                 ) : (
                   <button
                     onClick={() => { if (editingMessage) { editMessage(editingMessage.id, editInput); } else sendMessage(); }}
-                    disabled={(editingMessage ? (!editInput.trim() || editingSaving) : (!input.trim() || sending))}
+                    disabled={(editingMessage ? !editInput.trim() : !input.trim()) || sending}
                     className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
-                      ${(editingMessage ? (editInput.trim() && !editingSaving) : (input.trim() && !sending)) ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
-                    {(editingMessage ? editingSaving : sending)
+                      ${(editingMessage ? editInput.trim() : input.trim()) && !sending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
+                    {sending
                       ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       : <Icon name={editingMessage ? "Check" : "Send"} size={16} />}
                   </button>

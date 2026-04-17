@@ -53,14 +53,6 @@
       "body": {"action": "react", "message_id": 1, "emoji": "👍"},
       "expectedStatus": 401,
       "bodyMatcher": "partial"
-    },
-    {
-      "name": "Forward without token",
-      "method": "POST",
-      "path": "/",
-      "body": {"action": "forward", "message_id": 1, "chat_id": 1},
-      "expectedStatus": 401,
-      "bodyMatcher": "partial"
     }
   ]
 }
