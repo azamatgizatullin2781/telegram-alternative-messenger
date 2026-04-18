@@ -1,54 +1,7 @@
-import React, { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import Icon from "@/components/ui/icon";
 import { User, Message, CallSession, AppSettings, Accent, Theme, Wallpaper, DeviceInfo, Channel, LANGUAGES, REGIONS, useT } from "./IndexTypes";
 import { apiFetch, formatBytes, formatPhone, detectBrowser, detectOS, AUTH_URL, CALLS_URL, UPLOAD_URL } from "@/lib/api";
-
-// ─── Toast System ─────────────────────────────────────────────────────────────
-export type ToastType = "success" | "error" | "info" | "warning";
-interface Toast { id: number; type: ToastType; text: string; }
-interface ToastCtx { show: (text: string, type?: ToastType) => void; }
-export const ToastContext = createContext<ToastCtx>({ show: () => {} });
-export const useToast = () => useContext(ToastContext);
-
-export function ToastProvider({ children }: { children: React.ReactNode }) {
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const show = useCallback((text: string, type: ToastType = "info") => {
-    const id = Date.now();
-    setToasts(p => [...p, { id, type, text }]);
-    setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3500);
-  }, []);
-  const icons: Record<ToastType, string> = { success: "CheckCircle", error: "XCircle", info: "Info", warning: "AlertTriangle" };
-  const colors: Record<ToastType, string> = {
-    success: "bg-green-500", error: "bg-destructive", info: "bg-primary", warning: "bg-orange-500",
-  };
-  return (
-    <ToastContext.Provider value={{ show }}>
-      {children}
-      <div className="fixed bottom-20 md:bottom-5 right-4 z-[500] flex flex-col gap-2 pointer-events-none">
-        {toasts.map(t => (
-          <div key={t.id} className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl text-white text-sm shadow-xl max-w-xs animate-fade-in ${colors[t.type]}`}>
-            <Icon name={icons[t.type]} size={16} className="shrink-0" />
-            <span>{t.text}</span>
-          </div>
-        ))}
-      </div>
-    </ToastContext.Provider>
-  );
-}
-
-// ─── Browser Notifications ────────────────────────────────────────────────────
-export function requestNotificationPermission() {
-  if ("Notification" in window && Notification.permission === "default") {
-    Notification.requestPermission();
-  }
-}
-
-export function showBrowserNotification(title: string, body: string, icon?: string) {
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
-  const n = new Notification(title, { body, icon: icon || "/favicon.ico", badge: "/favicon.ico" });
-  n.onclick = () => { window.focus(); n.close(); };
-  setTimeout(() => n.close(), 5000);
-}
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 export function OnboardingScreen({ onDone }: { onDone: (lang: string, region: string) => void }) {
@@ -296,69 +249,14 @@ export function ReplyPreview({ msg }: { msg: Message }) {
   );
 }
 
-// ─── Voice Player (встроенный) ────────────────────────────────────────────────
-function VoicePlayer({ url, duration: totalDur, isOut }: { url: string; duration?: number; isOut: boolean }) {
-  const [playing, setPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [loaded, setLoaded] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
-
-  const toggle = () => {
-    if (!audioRef.current) return;
-    if (playing) { audioRef.current.pause(); setPlaying(false); }
-    else { audioRef.current.play(); setPlaying(true); }
-  };
-
-  const fmt = (s: number) => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(Math.floor(s%60)).padStart(2,"0")}`;
-  const dur = totalDur || 0;
-  const progress = dur > 0 ? (currentTime / dur) * 100 : 0;
-
-  return (
-    <div className="flex items-center gap-2.5 min-w-[180px] max-w-[220px]">
-      <audio ref={audioRef} src={url} preload="metadata"
-        onLoadedMetadata={() => setLoaded(true)}
-        onTimeUpdate={() => audioRef.current && setCurrentTime(audioRef.current.currentTime)}
-        onEnded={() => { setPlaying(false); setCurrentTime(0); if (audioRef.current) audioRef.current.currentTime = 0; }} />
-      <button onClick={toggle}
-        className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all
-          ${isOut ? "bg-white/25 hover:bg-white/35" : "bg-primary/15 hover:bg-primary/25"}`}>
-        <Icon name={playing ? "Pause" : "Play"} size={16} className={isOut ? "text-white" : "text-primary"} />
-      </button>
-      <div className="flex-1 min-w-0">
-        <div className={`h-1.5 rounded-full overflow-hidden ${isOut ? "bg-white/20" : "bg-muted"}`}
-          onClick={e => {
-            if (!audioRef.current || !loaded) return;
-            const rect = e.currentTarget.getBoundingClientRect();
-            const ratio = (e.clientX - rect.left) / rect.width;
-            audioRef.current.currentTime = ratio * (dur || audioRef.current.duration || 0);
-          }}>
-          <div className={`h-full rounded-full transition-all ${isOut ? "bg-white/70" : "bg-primary"}`}
-            style={{ width: `${progress}%` }} />
-        </div>
-        <div className="flex justify-between mt-0.5">
-          <span className={`text-[10px] ${isOut ? "text-white/60" : "text-muted-foreground"}`}>
-            {playing ? fmt(currentTime) : fmt(dur)}
-          </span>
-          {!isOut && <Icon name="Mic" size={10} className="text-muted-foreground" />}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Message Bubble ───────────────────────────────────────────────────────────
-export function MessageBubble({ msg, allMessages, onPhotoClick }: {
-  msg: Message;
-  allMessages: Message[];
-  onPhotoClick?: (url: string) => void;
-}) {
+export function MessageBubble({ msg, allMessages }: { msg: Message; allMessages: Message[] }) {
   const reply = msg.reply_to_id ? allMessages.find(m => m.id === msg.reply_to_id) : null;
-  const dur = (msg as { media_duration?: number }).media_duration;
   const renderContent = () => {
     if (msg.msg_type === "image" && msg.media_url) return (
       <div>{reply && <ReplyPreview msg={reply} />}
-        <img src={msg.media_url} alt="фото" className="max-w-[220px] sm:max-w-xs rounded-xl cursor-pointer hover:opacity-95 transition-opacity"
-          onClick={e => { e.stopPropagation(); onPhotoClick?.(msg.media_url!); }} />
+        <img src={msg.media_url} alt="фото" className="max-w-[220px] sm:max-w-xs rounded-xl cursor-pointer"
+          onClick={() => window.open(msg.media_url, "_blank")} />
         {msg.text && <p className="text-sm mt-1">{msg.text}</p>}
       </div>
     );
@@ -370,81 +268,73 @@ export function MessageBubble({ msg, allMessages, onPhotoClick }: {
     );
     if (msg.msg_type === "video_note" && msg.media_url) return (
       <div className="flex flex-col items-center gap-1">
-        <div className="w-28 h-28 rounded-full overflow-hidden border-2 border-white/20 shadow-lg relative group">
-          <video src={msg.media_url} loop playsInline
-            className="w-full h-full object-cover"
-            onClick={e => { const v = e.currentTarget; if (v.paused) { v.play(); } else { v.pause(); } }} />
-          <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors pointer-events-none">
-            <Icon name="CirclePlay" size={28} className="text-white opacity-80" />
-          </div>
+        <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden border-2 border-white/20">
+          <video src={msg.media_url} controls className="w-full h-full object-cover" />
         </div>
-        <span className={`text-[10px] ${msg.out ? "text-white/60" : "text-muted-foreground"}`}>Видеосообщение{dur ? ` · ${String(Math.floor(dur/60)).padStart(2,"0")}:${String(dur%60).padStart(2,"0")}` : ""}</span>
+        <span className="text-[10px] opacity-70">Видеосообщение</span>
       </div>
     );
     if (msg.msg_type === "voice" && msg.media_url) return (
-      <VoicePlayer url={msg.media_url} duration={dur} isOut={!!msg.out} />
+      <div className="flex items-center gap-2 min-w-[180px]">
+        <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+          <Icon name="Mic" size={16} className="text-white" />
+        </div>
+        <div className="flex-1">
+          <audio src={msg.media_url} controls className="h-7 max-w-[140px] sm:max-w-[180px]"
+            style={{ filter: "invert(1) hue-rotate(180deg)" }} />
+          {(msg as { media_duration?: number }).media_duration && (
+            <p className="text-[10px] opacity-70 mt-0.5">
+              {Math.floor(((msg as { media_duration?: number }).media_duration || 0) / 60).toString().padStart(2,"0")}:{String(((msg as { media_duration?: number }).media_duration || 0) % 60).padStart(2,"0")}
+            </p>
+          )}
+        </div>
+      </div>
     );
     if (msg.msg_type === "audio" && msg.media_url) return (
-      <div className="flex items-center gap-2.5 min-w-[180px]">
-        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0
-          ${msg.out ? "bg-white/20" : "bg-primary/10"}`}>
-          <Icon name="Music" size={18} className={msg.out ? "text-white" : "text-primary"} />
+      <div className="flex items-center gap-2 min-w-[180px]">
+        <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
+          <Icon name="Music" size={18} className="text-primary" />
         </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate">{msg.media_name || "Аудио"}</p>
-          <audio src={msg.media_url} controls className="h-7 w-full max-w-[150px] mt-0.5" />
-          {msg.media_size && <p className={`text-[10px] mt-0.5 ${msg.out ? "text-white/60" : "text-muted-foreground"}`}>{formatBytes(msg.media_size)}</p>}
+        <div className="flex-1">
+          <p className="text-sm font-medium truncate max-w-[120px] sm:max-w-[140px]">{msg.media_name || "Аудио"}</p>
+          <audio src={msg.media_url} controls className="h-7 max-w-[120px] sm:max-w-[140px]" />
+          {msg.media_size && <p className="text-[10px] opacity-70 mt-0.5">{formatBytes(msg.media_size)}</p>}
         </div>
       </div>
     );
     if (msg.msg_type === "document" && msg.media_url) return (
-      <a href={msg.media_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
-        className={`flex items-center gap-2.5 p-2.5 rounded-xl transition-colors min-w-[160px]
-          ${msg.out ? "bg-white/10 hover:bg-white/20" : "bg-muted hover:bg-muted/80"}`}>
-        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0
-          ${msg.out ? "bg-white/20" : "bg-primary/10"}`}>
-          <Icon name="FileText" size={17} className={msg.out ? "text-white" : "text-primary"} />
+      <a href={msg.media_url} target="_blank" rel="noopener noreferrer"
+        className="flex items-center gap-2.5 p-2 rounded-xl bg-white/10 hover:bg-white/20 transition-colors min-w-[160px]">
+        <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+          <Icon name="FileText" size={18} />
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium truncate">{msg.media_name || "Файл"}</p>
-          {msg.media_size && <p className={`text-[10px] ${msg.out ? "text-white/60" : "text-muted-foreground"}`}>{formatBytes(msg.media_size)}</p>}
+          {msg.media_size && <p className="text-[10px] opacity-70">{formatBytes(msg.media_size)}</p>}
         </div>
-        <Icon name="Download" size={14} className={`shrink-0 ${msg.out ? "text-white/60" : "text-muted-foreground"}`} />
+        <Icon name="Download" size={14} className="opacity-70 shrink-0" />
       </a>
     );
     if (msg.msg_type === "geo" && msg.geo_lat) return (
-      <a href={`https://maps.google.com/?q=${msg.geo_lat},${msg.geo_lon}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
-        className={`flex flex-col rounded-xl overflow-hidden min-w-[200px] ${msg.out ? "bg-white/10 hover:bg-white/20" : "bg-muted hover:bg-muted/80"} transition-colors`}>
-        <div className="relative h-24 bg-green-100 dark:bg-green-900/30 overflow-hidden">
-          <img
-            src={`https://static-maps.yandex.ru/1.x/?ll=${msg.geo_lon},${msg.geo_lat}&size=200,100&z=14&l=map&pt=${msg.geo_lon},${msg.geo_lat},pm2rdm`}
-            alt="карта" className="w-full h-full object-cover"
-            onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
-          />
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-8 h-8 rounded-full bg-red-500 flex items-center justify-center shadow-lg">
-              <Icon name="MapPin" size={16} className="text-white" />
-            </div>
-          </div>
+      <a href={`https://maps.google.com/?q=${msg.geo_lat},${msg.geo_lon}`} target="_blank" rel="noopener noreferrer"
+        className="flex items-center gap-2 p-2 rounded-xl bg-white/10 hover:bg-white/20 transition-colors">
+        <div className="w-9 h-9 rounded-xl bg-green-400/30 flex items-center justify-center">
+          <Icon name="MapPin" size={18} className="text-green-300" />
         </div>
-        <div className="flex items-center gap-2 px-2.5 py-2">
-          <Icon name="MapPin" size={13} className={msg.out ? "text-white/70" : "text-muted-foreground"} />
-          <div>
-            <p className="text-sm font-medium">Геопозиция</p>
-            <p className={`text-[10px] ${msg.out ? "text-white/60" : "text-muted-foreground"}`}>{msg.geo_lat?.toFixed(5)}, {msg.geo_lon?.toFixed(5)}</p>
-          </div>
+        <div>
+          <p className="text-sm font-medium">Геопозиция</p>
+          <p className="text-xs opacity-70">{msg.geo_lat?.toFixed(4)}, {msg.geo_lon?.toFixed(4)}</p>
         </div>
       </a>
     );
     if (msg.msg_type === "contact") return (
-      <div className={`flex items-center gap-2.5 p-2 rounded-xl ${msg.out ? "bg-white/10" : "bg-muted"}`}>
-        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0
-          ${msg.out ? "bg-white/20" : "bg-blue-100"}`}>
-          <Icon name="User" size={20} className={msg.out ? "text-white" : "text-blue-600"} />
+      <div className="flex items-center gap-2">
+        <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+          <Icon name="User" size={20} className="text-blue-600" />
         </div>
         <div>
           <p className="text-sm font-medium">{msg.contact_name}</p>
-          <p className={`text-xs ${msg.out ? "text-white/60" : "text-muted-foreground"}`}>{msg.contact_phone}</p>
+          <p className="text-xs opacity-70">{msg.contact_phone}</p>
         </div>
       </div>
     );
@@ -992,14 +882,7 @@ export function CallScreen({ partner, callType, roomId, isCallee, onEnd }: {
           className="w-16 h-16 rounded-full bg-destructive flex items-center justify-center shadow-xl hover:bg-destructive/90 transition-all">
           <Icon name="PhoneOff" size={28} className="text-white" />
         </button>
-        <button onClick={() => {
-            setSpeakerOff(s => {
-              const next = !s;
-              if (remoteAudioRef.current) remoteAudioRef.current.muted = next;
-              if (remoteVideoRef.current) remoteVideoRef.current.muted = next;
-              return next;
-            });
-          }}
+        <button onClick={() => setSpeakerOff(s => !s)}
           className={`w-13 h-13 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-all shadow-lg p-3 sm:p-0
             ${speakerOff ? "bg-white/20 ring-2 ring-red-400" : "bg-white/15 hover:bg-white/25"}`}>
           <Icon name={speakerOff ? "VolumeX" : "Volume2"} size={22} className="text-white" />
@@ -1261,38 +1144,10 @@ export function SettingsScreen({ user, settings, onSettings, onLogout, onAvatarU
         {tab === "notifications" && (
           <div className="space-y-2 animate-fade-in">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Уведомления</p>
-
-            {/* Browser permission banner */}
-            {"Notification" in window && Notification.permission === "default" && (
-              <div className="flex items-center gap-3 p-3.5 bg-primary/10 rounded-2xl border border-primary/20">
-                <Icon name="Bell" size={18} className="text-primary shrink-0" />
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-primary">Разрешите уведомления</p>
-                  <p className="text-xs text-muted-foreground">Чтобы получать уведомления о новых сообщениях</p>
-                </div>
-                <button onClick={() => Notification.requestPermission().then(() => { set({ notifications: true }); })}
-                  className="px-3 py-1.5 rounded-xl bg-primary text-white text-xs font-medium shrink-0">
-                  Разрешить
-                </button>
-              </div>
-            )}
-            {"Notification" in window && Notification.permission === "granted" && (
-              <div className="flex items-center gap-2 p-3 bg-green-500/10 rounded-2xl">
-                <Icon name="CheckCircle" size={14} className="text-green-500" />
-                <p className="text-xs text-green-600 font-medium">Уведомления разрешены браузером</p>
-              </div>
-            )}
-            {"Notification" in window && Notification.permission === "denied" && (
-              <div className="flex items-center gap-2 p-3 bg-destructive/10 rounded-2xl">
-                <Icon name="XCircle" size={14} className="text-destructive" />
-                <p className="text-xs text-destructive">Уведомления заблокированы. Разрешите в настройках браузера.</p>
-              </div>
-            )}
-
             {[
-              { key: "notifications", label: "Push-уведомления", desc: "О новых сообщениях и звонках", icon: "Bell" },
+              { key: "notifications", label: "Уведомления", desc: "Получать push-уведомления", icon: "Bell" },
               { key: "notifSound", label: "Звук", desc: "Звуковые сигналы при сообщениях", icon: "Volume2" },
-              { key: "notifPreview", label: "Предпросмотр текста", desc: "Показывать содержимое в уведомлении", icon: "Eye" },
+              { key: "notifPreview", label: "Предпросмотр", desc: "Показывать текст в уведомлении", icon: "Eye" },
             ].map(item => (
               <div key={item.key} className="flex items-center justify-between p-3.5 bg-card rounded-2xl border border-border">
                 <div className="flex items-center gap-3">
@@ -1304,20 +1159,14 @@ export function SettingsScreen({ user, settings, onSettings, onLogout, onAvatarU
                     <div className="text-xs text-muted-foreground">{item.desc}</div>
                   </div>
                 </div>
-                <button onClick={() => {
-                  const newVal = !settings[item.key as keyof AppSettings];
-                  if (item.key === "notifications" && newVal && "Notification" in window && Notification.permission === "default") {
-                    Notification.requestPermission();
-                  }
-                  set({ [item.key]: newVal } as Partial<AppSettings>);
-                }}
+                <button onClick={() => set({ [item.key]: !settings[item.key as keyof AppSettings] } as Partial<AppSettings>)}
                   className={`w-11 h-6 rounded-full transition-all relative shrink-0 ${settings[item.key as keyof AppSettings] ? "bg-primary" : "bg-muted-foreground/30"}`}>
                   <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 shadow-sm transition-all ${settings[item.key as keyof AppSettings] ? "left-[calc(100%-22px)]" : "left-0.5"}`} />
                 </button>
               </div>
             ))}
-            <div className="mt-2 p-3.5 bg-muted/50 rounded-2xl">
-              <p className="text-xs text-muted-foreground">Уведомления об отдельных чатах можно отключить в самом чате.</p>
+            <div className="mt-3 p-3.5 bg-muted/50 rounded-2xl">
+              <p className="text-xs text-muted-foreground">Уведомления для конкретных чатов можно настроить в самом чате.</p>
             </div>
           </div>
         )}
