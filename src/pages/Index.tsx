@@ -87,12 +87,10 @@ function IndexApp() {
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [editInput, setEditInput] = useState("");
   const [msgContextMenu, setMsgContextMenu] = useState<{msg: Message; x: number; y: number} | null>(null);
-  const [confirmDeleteMsgId, setConfirmDeleteMsgId] = useState<number | null>(null);
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
   const [showVideoNoteRecorder, setShowVideoNoteRecorder] = useState(false);
   const [viewingProfile, setViewingProfile] = useState<User | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
-  const [editingSaving, setEditingSaving] = useState(false);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -596,30 +594,25 @@ function IndexApp() {
   };
 
   const editMessage = async (msgId: number, newText: string) => {
-    const trimmed = newText.trim();
-    if (!trimmed || editingSaving) return;
-    setEditingSaving(true);
     const { ok, data } = await apiFetch(MESSAGES_URL, {
-      method: "POST", body: JSON.stringify({ action: "edit", message_id: msgId, text: trimmed }),
+      method: "POST", body: JSON.stringify({ action: "edit", message_id: msgId, text: newText }),
     });
-    setEditingSaving(false);
     if (ok) {
-      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, text: data.text as string, edited_at: data.edited_at as string } : m));
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, text: data.text, edited_at: data.edited_at } : m));
       setEditingMessage(null); setEditInput("");
       toast("Сообщение изменено", "success");
     } else {
-      toast((data?.error as string) || "Ошибка редактирования", "error");
+      toast("Ошибка редактирования", "error");
     }
   };
 
   const removeMessage = async (msgId: number) => {
-    setConfirmDeleteMsgId(null);
-    setMsgContextMenu(null);
     const { ok } = await apiFetch(MESSAGES_URL, {
       method: "POST", body: JSON.stringify({ action: "remove", message_id: msgId }),
     });
     if (ok) {
       setMessages(prev => prev.map(m => m.id === msgId ? { ...m, is_removed: true, text: "" } : m));
+      setMsgContextMenu(null);
       toast("Сообщение удалено", "info");
     } else {
       toast("Ошибка удаления", "error");
@@ -627,52 +620,22 @@ function IndexApp() {
   };
 
   const reactToMessage = async (msgId: number, emoji: string) => {
-    // Оптимистичное обновление
-    setMessages(prev => prev.map(m => {
-      if (m.id !== msgId) return m;
-      const existing = (m.reactions || []).filter(r => r.emoji && r.emoji !== "");
-      const myReaction = existing.find(r => r.user_id === user!.id);
-      if (myReaction) {
-        if (myReaction.emoji === emoji) {
-          // Снять реакцию
-          return { ...m, reactions: existing.filter(r => r.user_id !== user!.id) };
-        } else {
-          // Сменить реакцию
-          return { ...m, reactions: [...existing.filter(r => r.user_id !== user!.id), { emoji, user_id: user!.id, display_name: user!.display_name }] };
-        }
-      }
-      return { ...m, reactions: [...existing, { emoji, user_id: user!.id, display_name: user!.display_name }] };
-    }));
-    setMsgContextMenu(null);
     const { ok } = await apiFetch(MESSAGES_URL, {
       method: "POST", body: JSON.stringify({ action: "react", message_id: msgId, emoji }),
     });
-    if (!ok) {
-      // Откат при ошибке
+    if (ok) {
       setMessages(prev => prev.map(m => {
         if (m.id !== msgId) return m;
-        const existing = (m.reactions || []).filter(r => r.emoji && r.emoji !== "");
+        const existing = m.reactions || [];
         const myReaction = existing.find(r => r.user_id === user!.id);
-        if (myReaction?.emoji === emoji) return { ...m, reactions: existing.filter(r => r.user_id !== user!.id) };
-        return { ...m, reactions: [...existing.filter(r => r.user_id !== user!.id)] };
+        if (myReaction && myReaction.emoji === emoji) {
+          return { ...m, reactions: existing.filter(r => r.user_id !== user!.id) };
+        }
+        const without = existing.filter(r => r.user_id !== user!.id);
+        return { ...m, reactions: [...without, { emoji, user_id: user!.id, display_name: user!.display_name }] };
       }));
-      toast("Ошибка реакции", "error");
     }
-  };
-
-  const forwardMessage = async (msgId: number) => {
-    if (!activeChat) return;
     setMsgContextMenu(null);
-    const { ok, data } = await apiFetch(MESSAGES_URL, {
-      method: "POST", body: JSON.stringify({ action: "forward", message_id: msgId, chat_id: activeChat.chat_id }),
-    });
-    if (ok && data.message) {
-      setMessages(prev => [...prev, { ...(data.message as Message), out: true }]);
-      loadChats();
-      toast("Сообщение переслано", "success");
-    } else {
-      toast((data?.error as string) || "Ошибка пересылки", "error");
-    }
   };
 
   const blobToBase64 = (blob: Blob): Promise<string> => new Promise((res, rej) => {
@@ -1557,80 +1520,40 @@ function IndexApp() {
 
             {/* Context menu overlay */}
             {msgContextMenu && (
-              <div className="fixed inset-0 z-50" onClick={() => { setMsgContextMenu(null); setConfirmDeleteMsgId(null); }}>
-                <div className="absolute bg-card border border-border rounded-2xl shadow-xl py-1 min-w-[188px] z-50"
-                  style={{
-                    top: Math.min(msgContextMenu.y, window.innerHeight - 280),
-                    left: Math.max(4, Math.min(msgContextMenu.x, window.innerWidth - 196)),
-                  }}
+              <div className="fixed inset-0 z-50" onClick={() => setMsgContextMenu(null)}>
+                <div className="absolute bg-card border border-border rounded-2xl shadow-xl py-1 min-w-44 z-50"
+                  style={{ top: Math.min(msgContextMenu.y, window.innerHeight - 220), left: Math.min(msgContextMenu.x, window.innerWidth - 180) }}
                   onClick={e => e.stopPropagation()}>
                   {/* Quick reactions */}
-                  <div className="flex items-center justify-between px-2.5 py-2 border-b border-border">
-                    {["👍","❤️","😂","😮","😢","🔥"].map(emoji => {
-                      const hasMyReaction = msgContextMenu.msg.reactions?.find(r => r.user_id === user?.id && r.emoji === emoji);
-                      return (
-                        <button key={emoji} onClick={() => reactToMessage(msgContextMenu.msg.id, emoji)}
-                          className={`text-lg hover:scale-125 transition-transform rounded-lg p-0.5 ${hasMyReaction ? "bg-primary/15 scale-110" : ""}`}>
-                          {emoji}
-                        </button>
-                      );
-                    })}
+                  <div className="flex items-center gap-1 px-3 py-2 border-b border-border">
+                    {["👍","❤️","😂","😮","😢","🔥"].map(emoji => (
+                      <button key={emoji} onClick={() => reactToMessage(msgContextMenu.msg.id, emoji)}
+                        className={`text-xl hover:scale-125 transition-transform rounded-lg p-0.5 ${
+                          msgContextMenu.msg.reactions?.find(r => r.user_id === user?.id && r.emoji === emoji) ? "bg-primary/10" : ""
+                        }`}>
+                        {emoji}
+                      </button>
+                    ))}
                   </div>
-
-                  {/* Ответить */}
-                  {!msgContextMenu.msg.is_removed && (
-                    <button onClick={() => { setReplyTo(msgContextMenu.msg); setMsgContextMenu(null); setConfirmDeleteMsgId(null); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left transition-colors">
-                      <Icon name="Reply" size={14} className="text-muted-foreground" />Ответить
-                    </button>
-                  )}
-
-                  {/* Переслать */}
-                  {!msgContextMenu.msg.is_removed && (
-                    <button onClick={() => forwardMessage(msgContextMenu.msg.id)}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left transition-colors">
-                      <Icon name="Forward" size={14} className="text-muted-foreground" />Переслать
-                    </button>
-                  )}
-
-                  {/* Редактировать (только своё текстовое) */}
+                  <button onClick={() => { setReplyTo(msgContextMenu.msg); setMsgContextMenu(null); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left">
+                    <Icon name="Reply" size={14} className="text-muted-foreground" />Ответить
+                  </button>
                   {msgContextMenu.msg.out && !msgContextMenu.msg.is_removed && msgContextMenu.msg.msg_type === "text" && (
-                    <button onClick={() => { setEditingMessage(msgContextMenu.msg); setEditInput(msgContextMenu.msg.text); setMsgContextMenu(null); setConfirmDeleteMsgId(null); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left transition-colors">
+                    <button onClick={() => { setEditingMessage(msgContextMenu.msg); setEditInput(msgContextMenu.msg.text); setMsgContextMenu(null); }}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left">
                       <Icon name="Pencil" size={14} className="text-muted-foreground" />Редактировать
                     </button>
                   )}
-
-                  {/* Копировать */}
-                  {!msgContextMenu.msg.is_removed && msgContextMenu.msg.text && (
-                    <button onClick={() => { navigator.clipboard.writeText(msgContextMenu.msg.text); setMsgContextMenu(null); setConfirmDeleteMsgId(null); toast("Скопировано", "success"); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left transition-colors">
-                      <Icon name="Copy" size={14} className="text-muted-foreground" />Копировать
-                    </button>
-                  )}
-
-                  {/* Удалить с подтверждением */}
+                  <button onClick={() => { navigator.clipboard.writeText(msgContextMenu.msg.text); setMsgContextMenu(null); toast("Скопировано", "success"); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-muted text-left">
+                    <Icon name="Copy" size={14} className="text-muted-foreground" />Копировать
+                  </button>
                   {msgContextMenu.msg.out && !msgContextMenu.msg.is_removed && (
-                    confirmDeleteMsgId === msgContextMenu.msg.id ? (
-                      <div className="px-3 py-2 border-t border-border">
-                        <p className="text-xs text-muted-foreground mb-2 text-center">Удалить сообщение?</p>
-                        <div className="flex gap-1.5">
-                          <button onClick={() => setConfirmDeleteMsgId(null)}
-                            className="flex-1 py-1.5 text-xs rounded-lg border border-border hover:bg-muted transition-colors">
-                            Нет
-                          </button>
-                          <button onClick={() => removeMessage(msgContextMenu.msg.id)}
-                            className="flex-1 py-1.5 text-xs rounded-lg bg-destructive text-white hover:bg-destructive/90 transition-colors font-medium">
-                            Удалить
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button onClick={() => setConfirmDeleteMsgId(msgContextMenu.msg.id)}
-                        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-destructive/10 text-destructive text-left transition-colors border-t border-border">
-                        <Icon name="Trash2" size={14} />Удалить
-                      </button>
-                    )
+                    <button onClick={() => removeMessage(msgContextMenu.msg.id)}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-destructive/10 text-destructive text-left">
+                      <Icon name="Trash2" size={14} />Удалить
+                    </button>
                   )}
                 </div>
               </div>
@@ -1880,10 +1803,10 @@ function IndexApp() {
                 ) : (
                   <button
                     onClick={() => { if (editingMessage) { editMessage(editingMessage.id, editInput); } else sendMessage(); }}
-                    disabled={(editingMessage ? (!editInput.trim() || editingSaving) : (!input.trim() || sending))}
+                    disabled={(editingMessage ? !editInput.trim() : !input.trim()) || sending}
                     className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all shrink-0
-                      ${(editingMessage ? (editInput.trim() && !editingSaving) : (input.trim() && !sending)) ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
-                    {(editingMessage ? editingSaving : sending)
+                      ${(editingMessage ? editInput.trim() : input.trim()) && !sending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
+                    {sending
                       ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       : <Icon name={editingMessage ? "Check" : "Send"} size={16} />}
                   </button>

@@ -456,12 +456,6 @@ export function MessageBubble({ msg, allMessages, onPhotoClick }: {
   };
   return (
     <div>
-      {msg.forwarded_from_id && (
-        <div className={`flex items-center gap-1 mb-1 ${msg.out ? "text-white/60" : "text-muted-foreground"}`}>
-          <Icon name="Forward" size={11} />
-          <span className="text-[11px]">Переслано</span>
-        </div>
-      )}
       {renderContent()}
       <div className={`flex items-center justify-end gap-1 mt-0.5 ${msg.out ? "text-white/70" : "text-muted-foreground"}`}>
         <span className="text-[10px]">{msg.time}</span>
