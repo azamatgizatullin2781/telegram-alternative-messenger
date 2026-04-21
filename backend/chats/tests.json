@@ -1,13 +1,6 @@
 {
   "tests": [
     {
-      "name": "OPTIONS preflight",
-      "method": "OPTIONS",
-      "path": "/",
-      "expectedStatus": 200,
-      "bodyMatcher": "partial"
-    },
-    {
       "name": "Get chats without token",
       "method": "GET",
       "path": "/?action=chats",
@@ -22,10 +15,47 @@
       "bodyMatcher": "partial"
     },
     {
+      "name": "Get all_users without token",
+      "method": "GET",
+      "path": "/?action=all_users",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Get blocked without token",
+      "method": "GET",
+      "path": "/?action=blocked",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
       "name": "Search users without token",
       "method": "GET",
       "path": "/?action=search_users&q=test",
       "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Add contact without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "add_contact", "contact_id": 1},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Block user without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "block_user", "user_id": 1},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200,
       "bodyMatcher": "partial"
     }
   ]

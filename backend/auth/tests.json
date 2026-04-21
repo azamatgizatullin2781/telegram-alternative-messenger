@@ -1,6 +1,13 @@
 {
   "tests": [
     {
+      "name": "Get user without token",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
       "name": "OPTIONS preflight",
       "method": "OPTIONS",
       "path": "/",
@@ -8,19 +15,11 @@
       "bodyMatcher": "partial"
     },
     {
-      "name": "Register duplicate user",
+      "name": "Register — missing fields",
       "method": "POST",
       "path": "/",
-      "body": {"action": "register", "username": "testuser_wc01", "display_name": "Test User", "password": "secret123"},
-      "expectedStatus": 409,
-      "bodyMatcher": "partial"
-    },
-    {
-      "name": "Update profile without token",
-      "method": "POST",
-      "path": "/",
-      "body": {"action": "update_profile", "display_name": "New Name"},
-      "expectedStatus": 401,
+      "body": {"action": "register", "username": "ab", "display_name": "", "password": "123"},
+      "expectedStatus": 400,
       "bodyMatcher": "partial"
     },
     {
@@ -32,9 +31,34 @@
       "bodyMatcher": "partial"
     },
     {
-      "name": "Get me without token",
-      "method": "GET",
+      "name": "Update profile without token",
+      "method": "POST",
       "path": "/",
+      "body": {"action": "update_profile", "display_name": "New Name"},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Change password without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "change_password", "current_password": "old", "new_password": "newpass1"},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Recover account — missing fields",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "recover_account", "username": "someone"},
+      "expectedStatus": 400,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Ping online without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "ping_online"},
       "expectedStatus": 401,
       "bodyMatcher": "partial"
     }

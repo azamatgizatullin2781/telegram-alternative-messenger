@@ -1,13 +1,14 @@
 """
 WorChat Calls API — WebRTC сигналинг для аудио/видеозвонков.
-POST / {action: initiate}    — инициировать звонок (создаём room)
-POST / {action: answer}      — принять звонок
-POST / {action: reject}      — отклонить звонок
-POST / {action: end}         — завершить звонок
-POST / {action: signal}      — передать SDP/ICE сигнал
-GET  /?action=incoming       — входящий звонок (polling)
-GET  /?action=signals&room=X — получить сигналы для WebRTC
-GET  /?action=history        — история звонков
+POST / {action: initiate}      — инициировать звонок (создаём room)
+POST / {action: answer}        — принять звонок
+POST / {action: reject}        — отклонить звонок
+POST / {action: end}           — завершить звонок
+POST / {action: signal}        — передать SDP/ICE сигнал
+POST / {action: clear_history} — удалить историю звонков текущего пользователя
+GET  /?action=incoming         — входящий звонок (polling)
+GET  /?action=signals&room=X   — получить сигналы для WebRTC
+GET  /?action=history          — история звонков
 """
 import json
 import os
@@ -66,6 +67,7 @@ def handler(event: dict, context) -> dict:
         if method == "GET":
             action = params.get("action", "incoming")
 
+            # -------------------------------------------------------------------
             if action == "incoming":
                 cur = conn.cursor()
                 cur.execute(f"""
@@ -87,13 +89,12 @@ def handler(event: dict, context) -> dict:
                                "avatar_initials": row[7], "avatar_url": row[8]}
                 }})
 
+            # -------------------------------------------------------------------
             if action == "signals":
                 room_id = params.get("room")
                 since_id = int(params.get("since_id", "0"))
                 if not room_id:
                     return err(400, "Нет room")
-                # use bot_messages table as signal store keyed by room, or use a temporary approach
-                # Store signals in call_sessions description field as JSON queue
                 cur = conn.cursor()
                 cur.execute(f"""
                     SELECT id, caller_id, callee_id, status
@@ -106,7 +107,6 @@ def handler(event: dict, context) -> dict:
                 if user["id"] not in (cs[1], cs[2]):
                     return err(403, "Нет доступа")
 
-                # Use bot_messages as signal store (hack: bot_id = room_id, role = signal_type)
                 cur = conn.cursor()
                 cur.execute(f"""
                     SELECT id, role, text, extra_data
@@ -119,6 +119,7 @@ def handler(event: dict, context) -> dict:
                 signals = [{"id": r[0], "type": r[1], "data": r[3] or {}} for r in rows]
                 return ok({"signals": signals, "status": cs[3]})
 
+            # -------------------------------------------------------------------
             if action == "history":
                 cur = conn.cursor()
                 cur.execute(f"""
@@ -129,7 +130,8 @@ def handler(event: dict, context) -> dict:
                     FROM {SCHEMA}.call_sessions cs
                     JOIN {SCHEMA}.users caller ON caller.id = cs.caller_id
                     JOIN {SCHEMA}.users callee ON callee.id = cs.callee_id
-                    WHERE cs.caller_id = %s OR cs.callee_id = %s
+                    WHERE (cs.caller_id = %s OR cs.callee_id = %s)
+                      AND cs.status != 'deleted'
                     ORDER BY cs.created_at DESC LIMIT 50
                 """, (user["id"], user["id"]))
                 rows = cur.fetchall()
@@ -151,6 +153,7 @@ def handler(event: dict, context) -> dict:
             body = json.loads(event.get("body") or "{}")
             action = body.get("action", "")
 
+            # -------------------------------------------------------------------
             if action == "initiate":
                 callee_id = body.get("callee_id")
                 call_type = body.get("call_type", "audio")
@@ -159,7 +162,6 @@ def handler(event: dict, context) -> dict:
                 if call_type not in ("audio", "video"):
                     return err(400, "Неверный тип звонка")
 
-                # End any existing ringing calls for this pair
                 cur = conn.cursor()
                 cur.execute(f"""
                     UPDATE {SCHEMA}.call_sessions SET status = 'ended', ended_at = NOW()
@@ -176,6 +178,7 @@ def handler(event: dict, context) -> dict:
                 cur.close()
                 return ok({"call_id": call_id, "room_id": room_id})
 
+            # -------------------------------------------------------------------
             if action == "answer":
                 room_id = body.get("room_id")
                 if not room_id:
@@ -190,6 +193,7 @@ def handler(event: dict, context) -> dict:
                 cur.close()
                 return ok({"ok": True})
 
+            # -------------------------------------------------------------------
             if action == "reject":
                 room_id = body.get("room_id")
                 if not room_id:
@@ -204,6 +208,7 @@ def handler(event: dict, context) -> dict:
                 cur.close()
                 return ok({"ok": True})
 
+            # -------------------------------------------------------------------
             if action == "end":
                 room_id = body.get("room_id")
                 if not room_id:
@@ -218,9 +223,9 @@ def handler(event: dict, context) -> dict:
                 cur.close()
                 return ok({"ok": True})
 
+            # -------------------------------------------------------------------
             if action == "signal":
                 room_id = body.get("room_id")
-                # Accept both "signal_type"/"signal_data" (frontend) and "type"/"data" (legacy)
                 signal_type = body.get("signal_type") or body.get("type")
                 data = body.get("signal_data") or body.get("data") or {}
                 if not room_id or not signal_type:
@@ -239,6 +244,19 @@ def handler(event: dict, context) -> dict:
                     INSERT INTO {SCHEMA}.bot_messages (user_id, bot_id, role, text, extra_data)
                     VALUES (%s, %s, %s, %s, %s)
                 """, (user["id"], f"call_{room_id}", signal_type, "", json.dumps(data)))
+                conn.commit()
+                cur.close()
+                return ok({"ok": True})
+
+            # -------------------------------------------------------------------
+            if action == "clear_history":
+                cur = conn.cursor()
+                cur.execute(f"""
+                    UPDATE {SCHEMA}.call_sessions
+                    SET status = 'deleted'
+                    WHERE (caller_id = %s OR callee_id = %s)
+                      AND status != 'deleted'
+                """, (user["id"], user["id"]))
                 conn.commit()
                 cur.close()
                 return ok({"ok": True})

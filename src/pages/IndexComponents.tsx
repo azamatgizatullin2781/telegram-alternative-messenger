@@ -161,29 +161,38 @@ export function OnboardingScreen({ onDone }: { onDone: (lang: string, region: st
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 export function AuthScreen({ onAuth }: { onAuth: (u: User) => void }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [phone, setPhone] = useState("");
-  const [form, setForm] = useState({ display_name: "", password: "" });
+  const [mode, setMode] = useState<"login" | "register" | "recover">("login");
+  const [form, setForm] = useState({ username: "", display_name: "", password: "", secret_word: "" });
+  const [recoverForm, setRecoverForm] = useState({ username: "", secret_word: "", new_password: "" });
   const [error, setError] = useState("");
+  const [recoverSuccess, setRecoverSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
-  const handlePhone = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value.replace(/\D/g, "");
-    setPhone(val.startsWith("8") ? "7" + val.slice(1) : val);
-  };
-  const displayPhone = () => formatPhone(phone);
+  const setR = (k: string, v: string) => setRecoverForm(f => ({ ...f, [k]: v }));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(""); setLoading(true);
-    const { ok, data } = await apiFetch(AUTH_URL, {
-      method: "POST",
-      body: JSON.stringify({ action: mode, username: phone, ...form }),
-    });
+    const payload = mode === "register"
+      ? { action: "register", username: form.username, display_name: form.display_name, password: form.password, secret_word: form.secret_word }
+      : { action: "login", username: form.username, password: form.password };
+    const { ok, data } = await apiFetch(AUTH_URL, { method: "POST", body: JSON.stringify(payload) });
     setLoading(false);
     if (ok) { localStorage.setItem("wc_token", data.token); onAuth(data.user); }
-    else setError(data.error || "Ошибка авторизации");
+    else setError(data?.error || "Ошибка авторизации");
+  };
+
+  const submitRecover = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(""); setLoading(true);
+    const { ok, data } = await apiFetch(AUTH_URL, {
+      method: "POST",
+      body: JSON.stringify({ action: "recover_account", username: recoverForm.username, secret_word: recoverForm.secret_word, new_password: recoverForm.new_password }),
+    });
+    setLoading(false);
+    if (ok) { setRecoverSuccess(true); setRecoverForm({ username: "", secret_word: "", new_password: "" }); }
+    else setError(data?.error || "Ошибка восстановления");
   };
 
   return (
@@ -194,50 +203,126 @@ export function AuthScreen({ onAuth }: { onAuth: (u: User) => void }) {
             <Icon name="Lock" size={28} className="text-white" />
           </div>
           <h1 className="text-2xl font-bold">WorChat</h1>
-          <p className="text-sm text-muted-foreground mt-1">{mode === "login" ? "Войдите в аккаунт" : "Создайте аккаунт"}</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {mode === "login" ? "Войдите в аккаунт" : mode === "register" ? "Создайте аккаунт" : "Восстановление доступа"}
+          </p>
         </div>
         <div className="bg-white rounded-2xl shadow-sm border border-border p-5">
-          <div className="flex mb-5 bg-muted rounded-xl p-0.5">
-            {(["login", "register"] as const).map(m => (
-              <button key={m} onClick={() => { setMode(m); setError(""); }}
-                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all
-                  ${mode === m ? "bg-white shadow-sm text-foreground" : "text-muted-foreground"}`}>
-                {m === "login" ? "Вход" : "Регистрация"}
-              </button>
-            ))}
-          </div>
-          <form onSubmit={submit} className="space-y-3">
-            {mode === "register" && (
+          {mode !== "recover" && (
+            <div className="flex mb-5 bg-muted rounded-xl p-0.5">
+              {(["login", "register"] as const).map(m => (
+                <button key={m} onClick={() => { setMode(m); setError(""); }}
+                  className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all
+                    ${mode === m ? "bg-white shadow-sm text-foreground" : "text-muted-foreground"}`}>
+                  {m === "login" ? "Вход" : "Регистрация"}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {mode === "recover" ? (
+            recoverSuccess ? (
+              <div className="space-y-4 py-2">
+                <div className="flex flex-col items-center gap-2 text-center">
+                  <div className="w-12 h-12 rounded-full bg-green-500/10 flex items-center justify-center">
+                    <Icon name="CheckCircle" size={24} className="text-green-600" />
+                  </div>
+                  <p className="font-semibold text-sm">Пароль успешно изменён</p>
+                  <p className="text-xs text-muted-foreground">Теперь войдите с новым паролем</p>
+                </div>
+                <button onClick={() => { setMode("login"); setRecoverSuccess(false); setError(""); }}
+                  className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-all">
+                  Войти
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={submitRecover} className="space-y-3">
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Логин</label>
+                  <input value={recoverForm.username} onChange={e => setR("username", e.target.value.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase())}
+                    placeholder="username" required autoCapitalize="none"
+                    className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Секретное слово</label>
+                  <input value={recoverForm.secret_word} onChange={e => setR("secret_word", e.target.value)}
+                    placeholder="Ваше секретное слово" required
+                    className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Новый пароль</label>
+                  <input type="password" value={recoverForm.new_password} onChange={e => setR("new_password", e.target.value)}
+                    placeholder="••••••••" required minLength={6}
+                    className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+                </div>
+                {error && (
+                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-destructive/10 text-destructive text-xs">
+                    <Icon name="AlertCircle" size={14} />{error}
+                  </div>
+                )}
+                <button type="submit" disabled={loading}
+                  className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-all disabled:opacity-60 flex items-center justify-center gap-2">
+                  {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                  Восстановить
+                </button>
+                <button type="button" onClick={() => { setMode("login"); setError(""); }}
+                  className="w-full py-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
+                  Назад к входу
+                </button>
+              </form>
+            )
+          ) : (
+            <form onSubmit={submit} className="space-y-3">
+              {mode === "register" && (
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Имя</label>
+                  <input value={form.display_name} onChange={e => set("display_name", e.target.value)}
+                    placeholder="Ваше имя" required
+                    className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+                </div>
+              )}
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Имя</label>
-                <input value={form.display_name} onChange={e => set("display_name", e.target.value)}
-                  placeholder="Ваше имя" required
+                <label className="text-xs text-muted-foreground mb-1 block">Логин</label>
+                <input value={form.username} onChange={e => set("username", e.target.value.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase())}
+                  placeholder="username" required autoCapitalize="none"
+                  className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+                {mode === "register" && (
+                  <p className="text-xs text-muted-foreground mt-1">3–32 символа: латиница, цифры и _</p>
+                )}
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Пароль</label>
+                <input type="password" value={form.password} onChange={e => set("password", e.target.value)}
+                  placeholder="••••••••" required minLength={6}
                   className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
               </div>
-            )}
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Телефон</label>
-              <input value={displayPhone()} onChange={handlePhone}
-                placeholder="+7 (999) 123-45-67" required inputMode="tel"
-                className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Пароль</label>
-              <input type="password" value={form.password} onChange={e => set("password", e.target.value)}
-                placeholder="••••••••" required minLength={6}
-                className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
-            </div>
-            {error && (
-              <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-destructive/10 text-destructive text-xs">
-                <Icon name="AlertCircle" size={14} />{error}
-              </div>
-            )}
-            <button type="submit" disabled={loading}
-              className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-all disabled:opacity-60 flex items-center justify-center gap-2">
-              {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-              {mode === "login" ? "Войти" : "Зарегистрироваться"}
-            </button>
-          </form>
+              {mode === "register" && (
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Секретное слово <span className="text-muted-foreground/60">(для восстановления)</span></label>
+                  <input value={form.secret_word} onChange={e => set("secret_word", e.target.value)}
+                    placeholder="Слово для восстановления пароля"
+                    className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+                </div>
+              )}
+              {error && (
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-destructive/10 text-destructive text-xs">
+                  <Icon name="AlertCircle" size={14} />{error}
+                </div>
+              )}
+              <button type="submit" disabled={loading}
+                className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-all disabled:opacity-60 flex items-center justify-center gap-2">
+                {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                {mode === "login" ? "Войти" : "Зарегистрироваться"}
+              </button>
+              {mode === "login" && (
+                <button type="button" onClick={() => { setMode("recover"); setError(""); }}
+                  className="w-full py-2 text-xs text-muted-foreground hover:text-primary transition-colors">
+                  Забыли пароль?
+                </button>
+              )}
+            </form>
+          )}
+
           <div className="flex items-center justify-center gap-1.5 mt-4">
             <Icon name="Lock" size={11} className="text-green-500" />
             <span className="text-xs text-muted-foreground">Сквозное шифрование · WorChat</span>
@@ -768,11 +853,14 @@ export function VideoNoteRecorder({ onSend, onCancel }: {
 }
 
 // ─── User Profile Modal ───────────────────────────────────────────────────────
-export function UserProfileModal({ user, onClose, onStartChat, onCall }: {
+export function UserProfileModal({ user, onClose, onStartChat, onCall, onBlock, onUnblock, isBlocked }: {
   user: User;
   onClose: () => void;
   onStartChat?: () => void;
   onCall?: (type: "audio" | "video") => void;
+  onBlock?: (userId: number) => void;
+  onUnblock?: (userId: number) => void;
+  isBlocked?: boolean;
 }) {
   return (
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
@@ -805,7 +893,7 @@ export function UserProfileModal({ user, onClose, onStartChat, onCall }: {
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-2">
+          <div className="mt-4 grid grid-cols-4 gap-2">
             {onStartChat && (
               <button onClick={() => { onStartChat(); onClose(); }}
                 className="flex flex-col items-center gap-1.5 py-3 rounded-2xl bg-primary/10 hover:bg-primary/15 transition-colors">
@@ -826,6 +914,13 @@ export function UserProfileModal({ user, onClose, onStartChat, onCall }: {
                   <span className="text-xs font-medium text-blue-600">Видео</span>
                 </button>
               </>
+            )}
+            {(onBlock || onUnblock) && (
+              <button onClick={() => { if (isBlocked) { onUnblock?.(user.id); } else { onBlock?.(user.id); } onClose(); }}
+                className={`flex flex-col items-center gap-1.5 py-3 rounded-2xl transition-colors ${isBlocked ? "bg-green-500/10 hover:bg-green-500/15" : "bg-destructive/10 hover:bg-destructive/15"}`}>
+                <Icon name={isBlocked ? "ShieldCheck" : "ShieldX"} size={20} className={isBlocked ? "text-green-600" : "text-destructive"} />
+                <span className={`text-xs font-medium ${isBlocked ? "text-green-600" : "text-destructive"}`}>{isBlocked ? "Разблок." : "Блокировать"}</span>
+              </button>
             )}
           </div>
         </div>
@@ -1270,7 +1365,7 @@ export function SettingsScreen({ user, settings, onSettings, onLogout, onAvatarU
   avatarInputRef: React.RefObject<HTMLInputElement>;
   onUpdateProfile: (display_name: string, username: string) => Promise<string | null>;
 }) {
-  const [tab, setTab] = useState<"profile" | "appearance" | "notifications" | "privacy" | "storage" | "devices" | "language">("profile");
+  const [tab, setTab] = useState<"profile" | "appearance" | "notifications" | "privacy" | "security" | "storage" | "devices" | "language">("profile");
   const [editingProfile, setEditingProfile] = useState(false);
   const [editName, setEditName] = useState(user.display_name);
   const [editUsername, setEditUsername] = useState(user.username);
@@ -1303,11 +1398,28 @@ export function SettingsScreen({ user, settings, onSettings, onLogout, onAvatarU
     { value: "grid" as Wallpaper, label: "Сетка", cls: "chat-bg-grid" },
     { value: "bubbles" as Wallpaper, label: "Пузыри", cls: "chat-bg-bubbles" },
   ];
+  const [pwForm, setPwForm] = useState({ current: "", newPw: "", confirm: "" });
+  const [pwError, setPwError] = useState("");
+  const [pwSuccess, setPwSuccess] = useState(false);
+  const [pwSaving, setPwSaving] = useState(false);
+
+  const changePassword = async () => {
+    if (!pwForm.current || !pwForm.newPw || !pwForm.confirm) { setPwError("Заполните все поля"); return; }
+    if (pwForm.newPw !== pwForm.confirm) { setPwError("Пароли не совпадают"); return; }
+    if (pwForm.newPw.length < 6) { setPwError("Пароль минимум 6 символов"); return; }
+    setPwSaving(true); setPwError("");
+    const { ok, data } = await apiFetch(AUTH_URL, { method: "POST", body: JSON.stringify({ action: "change_password", current_password: pwForm.current, new_password: pwForm.newPw }) });
+    setPwSaving(false);
+    if (ok) { setPwSuccess(true); setPwForm({ current: "", newPw: "", confirm: "" }); setTimeout(() => setPwSuccess(false), 3000); }
+    else setPwError(data?.error || "Ошибка смены пароля");
+  };
+
   const tabs = [
     { id: "profile", icon: "User", label: "Профиль" },
     { id: "appearance", icon: "Palette", label: "Оформление" },
     { id: "notifications", icon: "Bell", label: "Уведомления" },
     { id: "privacy", icon: "Shield", label: "Конфиденц." },
+    { id: "security", icon: "ShieldCheck", label: "Безопасность" },
     { id: "storage", icon: "HardDrive", label: "Данные" },
     { id: "devices", icon: "Monitor", label: "Устройства" },
     { id: "language", icon: "Globe", label: "Язык" },
@@ -1658,6 +1770,60 @@ export function SettingsScreen({ user, settings, onSettings, onLogout, onAvatarU
           <DevicesTab onLogout={onLogout} />
         )}
 
+        {/* SECURITY */}
+        {tab === "security" && (
+          <div className="space-y-3 animate-fade-in">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Смена пароля</p>
+            <div className="bg-card rounded-2xl border border-border p-4 space-y-3">
+              {pwSuccess && (
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-green-500/10 text-green-600 text-sm">
+                  <Icon name="CheckCircle" size={14} />Пароль успешно изменён
+                </div>
+              )}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Текущий пароль</label>
+                <input type="password" value={pwForm.current} onChange={e => setPwForm(f => ({ ...f, current: e.target.value }))}
+                  placeholder="••••••••"
+                  className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Новый пароль</label>
+                <input type="password" value={pwForm.newPw} onChange={e => setPwForm(f => ({ ...f, newPw: e.target.value }))}
+                  placeholder="••••••••"
+                  className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Повторите новый пароль</label>
+                <input type="password" value={pwForm.confirm} onChange={e => setPwForm(f => ({ ...f, confirm: e.target.value }))}
+                  placeholder="••••••••"
+                  className="w-full px-3 py-2.5 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+              </div>
+              {pwError && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-destructive/10 text-destructive text-xs">
+                  <Icon name="AlertCircle" size={13} />{pwError}
+                </div>
+              )}
+              <button onClick={changePassword} disabled={pwSaving}
+                className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+                {pwSaving
+                  ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  : <Icon name="ShieldCheck" size={15} />}
+                Сменить пароль
+              </button>
+            </div>
+            <div className="bg-muted/50 rounded-xl p-3 space-y-1.5">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Icon name="Info" size={12} className="shrink-0" />
+                <span>Минимальная длина пароля — 6 символов</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Icon name="Info" size={12} className="shrink-0" />
+                <span>После смены пароля другие сессии не завершаются</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* LANGUAGE */}
         {tab === "language" && (
           <div className="space-y-3 animate-fade-in">
@@ -1993,12 +2159,8 @@ export function PaymentModal({
   onInitiate: (plan: string, period: "month" | "year") => void;
   onConfirm: () => void; onClose: () => void;
 }) {
-  const PLAN_INFO: Record<string, { name: string; price_month: number; price_year: number; badge: string; color: string }> = {
-    standard: { name: "Standard", price_month: 149, price_year: 1490, badge: "✦ STANDARD", color: "#0ea5e9" },
-    premium: { name: "Premium", price_month: 499, price_year: 4990, badge: "⭐ PREMIUM", color: "#6366f1" },
-  };
-  const info = PLAN_INFO[plan] || PLAN_INFO.premium;
-  const amount = period === "year" ? info.price_year : info.price_month;
+  const WC_PLAN = { name: "WorChat", price_month: 99, price_year: 999, badge: "⭐ WorChat", color: "#6366f1" };
+  const amount = period === "year" ? WC_PLAN.price_year : WC_PLAN.price_month;
   const periodLabel = period === "year" ? "год" : "месяц";
 
   const formatCard = (v: string) => v.replace(/\D/g,"").slice(0,16).replace(/(\d{4})/g,"$1 ").trim();
@@ -2016,34 +2178,40 @@ export function PaymentModal({
 
         {step === "select" && (
           <div className="px-6 pb-6 space-y-4">
-            <div className="grid grid-cols-2 gap-2">
-              {["standard","premium"].map(p => {
-                const pi = PLAN_INFO[p];
-                return (
-                  <button key={p} onClick={() => onSetPlan(p)}
-                    className={`p-3 rounded-xl border-2 text-left transition-all ${plan === p ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/40"}`}>
-                    <div className="text-sm font-bold" style={{ color: pi.color }}>{pi.badge}</div>
-                    <div className="text-xs text-muted-foreground mt-1">{pi.price_month}₽/мес</div>
-                  </button>
-                );
-              })}
+            <div className="bg-gradient-to-br from-primary/10 to-primary/5 rounded-2xl p-4 border-2 border-primary/30">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
+                  <Icon name="Star" size={20} className="text-white" />
+                </div>
+                <div>
+                  <div className="font-bold text-base" style={{ color: WC_PLAN.color }}>{WC_PLAN.badge}</div>
+                  <div className="text-xs text-muted-foreground">Полный доступ ко всем функциям</div>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                {["Звонки без ограничений", "Файлы до 2 ГБ", "Премиум-эмодзи", "Приоритетная поддержка"].map(f => (
+                  <div key={f} className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Icon name="Check" size={12} className="text-primary shrink-0" />{f}
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {([["month","1 месяц"],["year","1 год"]] as [string,string][]).map(([p, label]) => (
+              {([["month","1 месяц", `${WC_PLAN.price_month}₽`],["year","1 год", `${WC_PLAN.price_year}₽`]] as [string,string,string][]).map(([p, label, price]) => (
                 <button key={p} onClick={() => onSetPeriod(p as "month"|"year")}
                   className={`p-3 rounded-xl border-2 text-left transition-all ${period === p ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/40"}`}>
                   <div className="text-sm font-medium">{label}</div>
-                  <div className="text-xs text-muted-foreground">{p === "year" ? PLAN_INFO[plan]?.price_year+"₽" : PLAN_INFO[plan]?.price_month+"₽"}
-                    {p === "year" && <span className="ml-1 text-green-500 font-medium">-17%</span>}
+                  <div className="text-xs text-muted-foreground">{price}
+                    {p === "year" && <span className="ml-1 text-green-500 font-medium">-16%</span>}
                   </div>
                 </button>
               ))}
             </div>
             <div className="bg-muted/60 rounded-xl p-3 text-sm">
-              <div className="font-semibold">{info.badge} · {periodLabel}</div>
+              <div className="font-semibold">{WC_PLAN.badge} · {periodLabel}</div>
               <div className="text-2xl font-bold mt-1">{amount}₽</div>
             </div>
-            <button onClick={() => onInitiate(plan, period)} disabled={loading}
+            <button onClick={() => onInitiate("worchat", period)} disabled={loading}
               className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-2">
               {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
               Оформить за {amount}₽
@@ -2119,12 +2287,34 @@ export function PaymentModal({
             </div>
             <div className="text-center">
               <p className="text-lg font-bold">Оплата прошла!</p>
-              <p className="text-sm text-muted-foreground mt-1">Подписка {info.name} активирована</p>
+              <p className="text-sm text-muted-foreground mt-1">Подписка {WC_PLAN.name} активирована</p>
             </div>
             <button onClick={onClose} className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90">Отлично!</button>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── BotCommandButtons ────────────────────────────────────────────────────────
+export function BotCommandButtons({ onCommand }: { onCommand: (text: string) => void }) {
+  const commands = [
+    { label: "📋 Тарифы", cmd: "/plans" },
+    { label: "⭐ Подписка", cmd: "/worchat" },
+    { label: "📊 Статус", cmd: "/status" },
+    { label: "❓ Помощь", cmd: "/help" },
+    { label: "💬 Привет", cmd: "Привет! Как дела?" },
+    { label: "🤔 Что умеешь?", cmd: "Что ты умеешь?" },
+  ];
+  return (
+    <div className="px-3 py-2 flex flex-wrap gap-2 border-b border-border">
+      {commands.map(c => (
+        <button key={c.cmd} onClick={() => onCommand(c.cmd)}
+          className="px-3 py-1.5 rounded-full bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors active:scale-95">
+          {c.label}
+        </button>
+      ))}
     </div>
   );
 }

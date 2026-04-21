@@ -23,35 +23,65 @@ CORS = {
 }
 
 PLANS = {
+    "worchat": {
+        "id": "worchat",
+        "name": "WorChat",
+        "badge": "⭐ WORCHAT",
+        "color": "#6366f1",
+        "price_month": 99,
+        "price_year": 999,
+        "currency": "₽",
+        "features": [
+            "Файлы до 5 ГБ каждый",
+            "Бессрочная история сообщений",
+            "Значок ⭐ WorChat в профиле",
+            "Голосовые и видеозвонки HD",
+            "Истории (Stories)",
+            "Кастомные темы оформления",
+            "Реакции любыми эмодзи",
+            "Приоритетная поддержка 24/7",
+            "Блокировка пользователей",
+            "Ранний доступ к функциям",
+        ],
+        "description": (
+            "⭐ WorChat — всё лучшее в одной подписке!\n\n"
+            "• 📦 Файлы до 5 ГБ каждый\n"
+            "• ♾ Бессрочная история сообщений\n"
+            "• ⭐ Значок WorChat в профиле\n"
+            "• 📹 Видеозвонки HD качества\n"
+            "• 📸 Истории (Stories) 24 часа\n"
+            "• 🎨 Кастомные темы оформления\n"
+            "• 🎭 Реакции любыми эмодзи\n"
+            "• 🎧 Приоритетная поддержка 24/7\n"
+            "• 🚀 Ранний доступ к функциям\n\n"
+            "💎 Цена: 99₽/мес или 999₽/год (2 месяца в подарок)"
+        ),
+    },
     "standard": {
         "id": "standard",
         "name": "Standard",
         "badge": "✦ STANDARD",
         "color": "#0ea5e9",
-        "price_month": 149,
-        "price_year": 1490,
+        "price_month": 99,
+        "price_year": 999,
         "currency": "₽",
         "features": [
-            "Файлы до 1 ГБ",
-            "История сообщений 3 месяца",
-            "Статус ✦ Standard",
-            "До 5 активных устройств",
-            "Папки чатов (до 5 штук)",
+            "Файлы до 5 ГБ",
+            "Бессрочная история",
+            "Значок ✦ Standard",
+            "Истории (Stories)",
             "Реакции на сообщения",
             "Приоритетная поддержка",
-            "Отключение рекламы",
         ],
         "description": (
-            "✦ WorChat Standard — старт нового уровня общения!\n\n"
-            "• 📁 Файлы до 1 ГБ каждый\n"
-            "• 🗂 История сообщений 3 месяца\n"
-            "• ✦ Статус Standard в профиле\n"
-            "• 📱 До 5 активных устройств\n"
-            "• 📂 Папки и фильтры чатов\n"
+            "✦ WorChat Standard — всё необходимое!\n\n"
+            "• 📁 Файлы до 5 ГБ каждый\n"
+            "• ♾ Бессрочная история сообщений\n"
+            "• ✦ Значок Standard в профиле\n"
+            "• 📸 Истории (Stories)\n"
             "• 👍 Реакции на сообщения\n"
-            "• 🎧 Приоритетная поддержка\n"
-            "• 🚫 Без рекламы\n\n"
-            "💙 Цена: 149₽/мес или 1490₽/год (2 месяца в подарок)"
+            "• 🎧 Приоритетная поддержка\n\n"
+            "💙 Цена: 99₽/мес или 999₽/год"
         ),
     },
     "premium": {
@@ -59,36 +89,30 @@ PLANS = {
         "name": "Premium",
         "badge": "⭐ PREMIUM",
         "color": "#6366f1",
-        "price_month": 499,
-        "price_year": 4990,
+        "price_month": 99,
+        "price_year": 999,
         "currency": "₽",
         "features": [
-            "Безлимитные файлы до 10 ГБ",
+            "Файлы до 5 ГБ",
             "Бессрочная история сообщений",
-            "Эксклюзивный статус ⭐ Premium",
-            "Безлимитные устройства",
+            "Эксклюзивный значок ⭐ Premium",
             "Кастомные темы оформления",
-            "Анимированные аватары",
-            "Уникальный @username.premium",
-            "Голосовые и видеозвонки HD 4K",
-            "Папки чатов без ограничений",
+            "Истории (Stories) 24 часа",
             "Реакции любыми эмодзи",
             "Ранний доступ к новым функциям",
             "Персональный менеджер поддержки",
         ],
         "description": (
             "⭐ WorChat Premium — максимум возможностей!\n\n"
-            "• 📦 Файлы до 10 ГБ (безлимит)\n"
+            "• 📦 Файлы до 5 ГБ\n"
             "• ♾ Бессрочная история сообщений\n"
-            "• ⭐ Статус Premium + анимированный аватар\n"
-            "• 📱 Безлимитные устройства\n"
+            "• ⭐ Значок Premium в профиле\n"
             "• 🎨 Кастомные темы оформления\n"
-            "• 📹 Видеозвонки HD 4K\n"
-            "• 📂 Папки чатов без ограничений\n"
+            "• 📸 Истории (Stories)\n"
             "• 🎭 Реакции любыми эмодзи\n"
             "• 🚀 Ранний доступ к функциям\n"
             "• 👤 Персональный менеджер\n\n"
-            "💎 Цена: 499₽/мес или 4990₽/год (2 месяца в подарок)"
+            "💎 Цена: 99₽/мес или 999₽/год"
         ),
     },
 }
@@ -99,15 +123,14 @@ SYSTEM_PROMPT = """Ты WorChat Bot — живой, дружелюбный ИИ-
 
 О WorChat:
 - Это защищённый мессенджер с шифрованием E2E
-- Есть тарифы: Standard (149₽/мес, 1490₽/год) и Premium (499₽/мес, 4990₽/год)
-- Standard: файлы до 1 ГБ, история 3 мес, до 5 устройств
-- Premium: файлы до 10 ГБ, бессрочная история, неограниченные устройства, HD-звонки
+- Подписка WorChat: 99₽/мес или 999₽/год (2 месяца в подарок)
+- С подпиской: файлы до 5 ГБ, бессрочная история, HD-звонки, истории (Stories), кастомные темы, значок ⭐ в профиле
+- Без подписки: базовые функции чата, файлы до 50 МБ
 
 Команды которые ты понимаешь:
-/plans — тарифы, /standard — оформить Standard, /premium — оформить Premium,
-/status — статус подписки, /help — список команд
+/plans — тарифы, /worchat — оформить WorChat подписку, /status — статус подписки, /help — список команд
 
-Если пользователь хочет оформить подписку — скажи что нужно написать /standard или /premium.
+Если пользователь хочет оформить подписку — скажи что нужно написать /worchat.
 Можешь помогать с вопросами, советами, разговорами на любую тему — ты умный ассистент!
 """
 
@@ -286,37 +309,30 @@ def handle_command(user_id, text, display_name):
     """Обработка специальных команд (/plans, /standard, /premium, /status, /help)."""
     t = text.strip().lower()
 
-    if any(w in t for w in ["/plans", "/тарифы"]):
+    if any(w in t for w in ["/plans", "/тарифы", "/подписки"]):
         reply = (
-            "📋 Тарифы WorChat:\n\n"
-            "✦ Standard — 149₽/мес или 1490₽/год\n"
-            "• Файлы до 1 ГБ, история 3 мес, 5 устройств\n\n"
-            "⭐ Premium — 499₽/мес или 4990₽/год\n"
-            "• Файлы до 10 ГБ, бессрочная история, HD-звонки\n\n"
-            "Напиши /standard или /premium для оформления."
+            "📋 Подписка WorChat:\n\n"
+            "⭐ WorChat — 99₽/мес или 999₽/год\n"
+            "• Файлы до 5 ГБ\n"
+            "• Бессрочная история\n"
+            "• HD видеозвонки\n"
+            "• Истории (Stories)\n"
+            "• Кастомные темы\n"
+            "• Значок ⭐ в профиле\n\n"
+            "Напиши /worchat для оформления подписки."
         )
         save_msg(user_id, "bot", reply)
         return {"text": reply, "type": "text"}
 
-    if t in ["/standard"] or t == "standard":
+    if t in ["/worchat", "/standard", "/premium"] or t in ["worchat", "standard", "premium"]:
         sub = get_subscription(user_id)
-        if sub and sub["plan"] == "standard":
-            reply = f"✦ У тебя уже активен Standard!\nДействует до: {sub['expires_at']}"
+        if sub:
+            reply = f"⭐ У тебя уже активна подписка WorChat!\nДействует до: {sub['expires_at']}"
             save_msg(user_id, "bot", reply)
             return {"text": reply, "type": "text"}
-        plan = PLANS["standard"]
-        save_msg(user_id, "bot", plan["description"], {"type": "subscription_offer", "plan": "standard"})
-        return {"text": plan["description"], "type": "subscription_offer", "plan": "standard"}
-
-    if t in ["/premium"] or t == "premium":
-        sub = get_subscription(user_id)
-        if sub and sub["plan"] == "premium":
-            reply = f"⭐ У тебя уже активен Premium!\nДействует до: {sub['expires_at']}"
-            save_msg(user_id, "bot", reply)
-            return {"text": reply, "type": "text"}
-        plan = PLANS["premium"]
-        save_msg(user_id, "bot", plan["description"], {"type": "subscription_offer", "plan": "premium"})
-        return {"text": plan["description"], "type": "subscription_offer", "plan": "premium"}
+        plan = PLANS["worchat"]
+        save_msg(user_id, "bot", plan["description"], {"type": "subscription_offer", "plan": "worchat"})
+        return {"text": plan["description"], "type": "subscription_offer", "plan": "worchat"}
 
     if any(w in t for w in ["/status", "/моя подписка"]):
         sub = get_subscription(user_id)
@@ -333,7 +349,7 @@ def handle_command(user_id, text, display_name):
         save_msg(user_id, "bot", reply)
         return {"text": reply, "type": "text"}
 
-    if any(w in t for w in ["/help", "/start"]):
+    if any(w in t for w in ["/help", "/start", "/старт"]):
         reply = (
             f"👋 Привет, {display_name}!\n\n"
             "Я умный ИИ-ассистент WorChat. Могу:\n"
@@ -341,9 +357,8 @@ def handle_command(user_id, text, display_name):
             "• Помочь с задачами\n"
             "• Поддержать разговор\n\n"
             "📌 Команды:\n"
-            "/plans — тарифы подписки\n"
-            "/standard — оформить Standard\n"
-            "/premium — оформить Premium\n"
+            "/plans — подписка WorChat\n"
+            "/worchat — оформить подписку\n"
             "/status — моя подписка\n\n"
             "Просто напиши мне что угодно! 🚀"
         )

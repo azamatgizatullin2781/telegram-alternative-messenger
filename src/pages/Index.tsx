@@ -15,6 +15,7 @@ import {
   SettingsScreen, CreateChannelModal, EditChannelModal, PaymentModal,
   VoiceRecorder, VideoNoteRecorder, UserProfileModal, PhotoViewer,
   ToastProvider, useToast, requestNotificationPermission, showBrowserNotification,
+  BotCommandButtons,
 } from "./IndexComponents";
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
@@ -73,7 +74,7 @@ function IndexApp() {
   const [channelPostInput, setChannelPostInput] = useState("");
   const [channelPostSending, setChannelPostSending] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
-  const [paymentPlan, setPaymentPlan] = useState<string>("premium");
+  const [paymentPlan, setPaymentPlan] = useState<string>("worchat");
   const [paymentPeriod, setPaymentPeriod] = useState<"month" | "year">("month");
   const [paymentStep, setPaymentStep] = useState<"select" | "form" | "success">("select");
   const [paymentMethod, setPaymentMethod] = useState<"card" | "sbp">("card");
@@ -93,6 +94,13 @@ function IndexApp() {
   const [viewingProfile, setViewingProfile] = useState<User | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
   const [editingSaving, setEditingSaving] = useState(false);
+  const [blockedUsers, setBlockedUsers] = useState<number[]>(() => {
+    try { return JSON.parse(localStorage.getItem("wc_blocked") || "[]"); } catch { return []; }
+  });
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [allUsersLoading, setAllUsersLoading] = useState(false);
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [clearingCallHistory, setClearingCallHistory] = useState(false);
 
   // ─── Archive (localStorage) ────────────────────────────────────────────────
   const [archivedChats, setArchivedChats] = useState<number[]>(() => {
@@ -158,6 +166,15 @@ function IndexApp() {
       setAuthChecked(true);
     });
   }, []);
+
+  // Ping online every 30 seconds
+  useEffect(() => {
+    if (!user) return;
+    const pingOnline = () => apiFetch(AUTH_URL, { method: "POST", body: JSON.stringify({ action: "ping_online" }) });
+    pingOnline();
+    const interval = setInterval(pingOnline, 30000);
+    return () => clearInterval(interval);
+  }, [user]);
 
   const loadChats = useCallback(async () => {
     const { ok, data } = await apiFetch(`${CHATS_URL}?action=chats`);
@@ -358,6 +375,51 @@ function IndexApp() {
       const found = updated.find(c => c.chat_id === data.chat_id);
       if (found) { setSection("chats"); setSearchQuery(""); openChat(found); }
     }
+  };
+
+  const blockUser = async (userId: number) => {
+    const { ok } = await apiFetch(CHATS_URL, { method: "POST", body: JSON.stringify({ action: "block_user", user_id: userId }) });
+    if (ok) {
+      const next = [...blockedUsers, userId];
+      setBlockedUsers(next);
+      localStorage.setItem("wc_blocked", JSON.stringify(next));
+      toast("Пользователь заблокирован", "success");
+    }
+  };
+
+  const unblockUser = async (userId: number) => {
+    const { ok } = await apiFetch(CHATS_URL, { method: "POST", body: JSON.stringify({ action: "unblock_user", user_id: userId }) });
+    if (ok) {
+      const next = blockedUsers.filter(id => id !== userId);
+      setBlockedUsers(next);
+      localStorage.setItem("wc_blocked", JSON.stringify(next));
+      toast("Пользователь разблокирован", "success");
+    }
+  };
+
+  const addContact = async (userId: number) => {
+    const { ok } = await apiFetch(CHATS_URL, { method: "POST", body: JSON.stringify({ action: "add_contact", contact_id: userId }) });
+    if (ok) { loadContacts(); toast("Контакт добавлен", "success"); }
+  };
+
+  const removeContact = async (userId: number) => {
+    const { ok } = await apiFetch(CHATS_URL, { method: "POST", body: JSON.stringify({ action: "remove_contact", contact_id: userId }) });
+    if (ok) { loadContacts(); toast("Контакт удалён", "success"); }
+  };
+
+  const loadAllUsers = useCallback(async () => {
+    setAllUsersLoading(true);
+    const { ok, data } = await apiFetch(`${CHATS_URL}?action=all_users`);
+    if (ok) setAllUsers(data.users || []);
+    setAllUsersLoading(false);
+  }, []);
+
+  const clearCallHistory = async () => {
+    setClearingCallHistory(true);
+    const { ok } = await apiFetch(CALLS_URL, { method: "POST", body: JSON.stringify({ action: "clear_history" }) });
+    if (ok) { setCallHistory([]); toast("История звонков очищена", "success"); }
+    else toast("Ошибка очистки", "error");
+    setClearingCallHistory(false);
   };
 
   const searchPeopleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -773,8 +835,8 @@ function IndexApp() {
     setUploadingMedia(false);
   };
 
-  const paySubscription = (plan: string) => {
-    setPaymentPlan(plan);
+  const paySubscription = (_plan?: string) => {
+    setPaymentPlan("worchat");
     setPaymentPeriod("month");
     setPaymentStep("select");
     setShowPayment(true);
@@ -883,6 +945,9 @@ function IndexApp() {
           onClose={() => setViewingProfile(null)}
           onStartChat={() => { startChatWithContact(viewingProfile); setViewingProfile(null); }}
           onCall={(type) => { startCall(viewingProfile, type); setViewingProfile(null); }}
+          onBlock={(userId) => blockUser(userId)}
+          onUnblock={(userId) => unblockUser(userId)}
+          isBlocked={viewingProfile ? blockedUsers.includes(viewingProfile.id) : false}
         />
       )}
 
@@ -1198,38 +1263,101 @@ function IndexApp() {
 
           {/* CONTACTS */}
           {section === "contacts" && (
-            <div className="px-4 py-2">
-              {contacts.length === 0 && (
-                <div className="flex justify-center py-8">
-                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <div>
+              <div className="flex gap-1 px-4 py-2 border-b border-border">
+                <button onClick={() => setShowAddContact(false)}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all ${!showAddContact ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted"}`}>
+                  Мои контакты
+                </button>
+                <button onClick={() => { setShowAddContact(true); if (allUsers.length === 0) loadAllUsers(); }}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all ${showAddContact ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted"}`}>
+                  Найти людей
+                </button>
+              </div>
+
+              {!showAddContact && (
+                <div className="px-4 py-2">
+                  {contacts.length === 0 && !chatsLoading && (
+                    <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground text-center">
+                      <Icon name="Users" size={36} className="opacity-20" />
+                      <p className="text-sm">Контактов пока нет</p>
+                      <button onClick={() => { setShowAddContact(true); if (allUsers.length === 0) loadAllUsers(); }}
+                        className="px-4 py-2 bg-primary text-white rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors">
+                        Найти людей
+                      </button>
+                    </div>
+                  )}
+                  {(["online", "offline"] as const).map(st => {
+                    const list = filteredContacts.filter(c => c.status === st);
+                    if (!list.length) return null;
+                    return (
+                      <div key={st}>
+                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mt-3 mb-1.5">
+                          {st === "online" ? `Онлайн · ${list.length}` : `Не в сети · ${list.length}`}
+                        </div>
+                        {list.map(c => (
+                          <div key={c.id} className={`flex items-center gap-3 py-2.5 px-2 ${st === "offline" ? "opacity-55" : ""}`}>
+                            <button onClick={() => setViewingProfile(c)} className="shrink-0">
+                              <Avatar user={c} size={40} />
+                            </button>
+                            <button onClick={() => setViewingProfile(c)} className="flex-1 min-w-0 text-left hover:bg-muted/60 rounded-xl px-2 py-1 -mx-2 -my-1 transition-colors">
+                              <div className="text-sm font-medium">{c.display_name}</div>
+                              <div className="text-xs text-muted-foreground">@{c.username}</div>
+                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button onClick={() => startChatWithContact(c)}
+                                className="w-9 h-9 rounded-xl hover:bg-muted flex items-center justify-center transition-colors">
+                                <Icon name="MessageCircle" size={15} className="text-muted-foreground" />
+                              </button>
+                              <button onClick={() => removeContact(c.id)}
+                                className="w-9 h-9 rounded-xl hover:bg-destructive/10 flex items-center justify-center transition-colors">
+                                <Icon name="UserMinus" size={15} className="text-destructive" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-              {(["online", "offline"] as const).map(st => {
-                const list = filteredContacts.filter(c => c.status === st);
-                if (!list.length) return null;
-                return (
-                  <div key={st}>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mt-3 mb-1.5">
-                      {st === "online" ? `Онлайн · ${list.length}` : `Не в сети · ${list.length}`}
-                    </div>
-                    {list.map(c => (
-                      <div key={c.id} className={`flex items-center gap-3 py-2.5 px-2 ${st === "offline" ? "opacity-55" : ""}`}>
-                        <button onClick={() => setViewingProfile(c)} className="shrink-0">
-                          <Avatar user={c} size={40} />
+
+              {showAddContact && (
+                <div className="px-4 py-2">
+                  {allUsersLoading && <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}
+                  {!allUsersLoading && allUsers.filter(u => !blockedUsers.includes(u.id)).map(u => {
+                    const isContact = contacts.some(c => c.id === u.id);
+                    return (
+                      <div key={u.id} className="flex items-center gap-3 py-2.5 px-2">
+                        <button onClick={() => setViewingProfile(u)} className="shrink-0">
+                          <Avatar user={u} size={40} />
                         </button>
-                        <button onClick={() => setViewingProfile(c)} className="flex-1 min-w-0 text-left hover:bg-muted/60 rounded-xl px-2 py-1 -mx-2 -my-1 transition-colors">
-                          <div className="text-sm font-medium">{c.display_name}</div>
-                          <div className="text-xs text-muted-foreground">@{c.username}</div>
+                        <button onClick={() => setViewingProfile(u)} className="flex-1 min-w-0 text-left hover:bg-muted/60 rounded-xl px-2 py-1 -mx-2 -my-1 transition-colors">
+                          <div className="text-sm font-medium">{u.display_name}</div>
+                          <div className="text-xs text-muted-foreground">@{u.username}</div>
                         </button>
-                        <button onClick={() => startChatWithContact(c)}
-                          className="w-9 h-9 rounded-xl hover:bg-muted flex items-center justify-center transition-colors shrink-0">
-                          <Icon name="MessageCircle" size={15} className="text-muted-foreground" />
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button onClick={() => startChatWithContact(u)}
+                            className="w-9 h-9 rounded-xl hover:bg-muted flex items-center justify-center transition-colors">
+                            <Icon name="MessageCircle" size={15} className="text-muted-foreground" />
+                          </button>
+                          {isContact ? (
+                            <button onClick={() => removeContact(u.id)}
+                              className="w-9 h-9 rounded-xl hover:bg-destructive/10 flex items-center justify-center transition-colors">
+                              <Icon name="UserMinus" size={15} className="text-destructive" />
+                            </button>
+                          ) : (
+                            <button onClick={() => addContact(u.id)}
+                              className="w-9 h-9 rounded-xl hover:bg-primary/10 flex items-center justify-center transition-colors">
+                              <Icon name="UserPlus" size={15} className="text-primary" />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -1237,6 +1365,15 @@ function IndexApp() {
           {/* CALLS */}
           {section === "calls" && (
             <div className="px-4 py-2">
+              {callHistory.length > 0 && (
+                <div className="flex justify-end py-2 border-b border-border mb-1">
+                  <button onClick={clearCallHistory} disabled={clearingCallHistory}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs text-destructive hover:bg-destructive/10 transition-colors">
+                    <Icon name="Trash2" size={13} />
+                    {clearingCallHistory ? "Очищаю..." : "Очистить историю"}
+                  </button>
+                </div>
+              )}
               {callHistory.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground">
                   <Icon name="PhoneOff" size={36} className="opacity-20" />
@@ -1625,10 +1762,10 @@ function IndexApp() {
                       <div className="max-w-xs bg-card border border-border rounded-2xl p-4 shadow-sm animate-fade-in">
                         <p className="text-sm text-foreground mb-3 whitespace-pre-wrap leading-relaxed">{bm.text}</p>
                         {!subscription ? (
-                          <button onClick={() => paySubscription(planId)}
+                          <button onClick={() => paySubscription()}
                             className="w-full py-2.5 rounded-xl text-white text-sm font-semibold"
-                            style={{ background: planId === "premium" ? "linear-gradient(135deg,#6366f1,#a855f7,#ec4899)" : "linear-gradient(135deg,#0ea5e9,#06b6d4)" }}>
-                            {planId === "premium" ? "Оформить Premium — 499₽/мес" : "Оформить Standard — 149₽/мес"}
+                            style={{ background: "linear-gradient(135deg,#6366f1,#a855f7,#ec4899)" }}>
+                            Оформить WorChat — 99₽/мес
                           </button>
                         ) : (
                           <div className="text-center text-sm text-green-600 font-medium">✓ Подписка активна</div>
@@ -1651,19 +1788,22 @@ function IndexApp() {
               <div ref={botEndRef} />
             </div>
 
-            <div className="px-4 py-3 bg-card border-t border-border shrink-0">
-              <div className="flex items-center gap-2">
-                <input value={botInput} onChange={e => setBotInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendBotMessage(); } }}
-                  placeholder="Написать боту..."
-                  className="flex-1 px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
-                <button onClick={sendBotMessage} disabled={!botInput.trim() || botSending}
-                  className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all
-                    ${botInput.trim() && !botSending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
-                  {botSending
-                    ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    : <Icon name="Send" size={16} />}
-                </button>
+            <div className="bg-card border-t border-border shrink-0">
+              <BotCommandButtons onCommand={(cmd) => { setBotInput(cmd); }} />
+              <div className="px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <input value={botInput} onChange={e => setBotInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendBotMessage(); } }}
+                    placeholder="Написать боту..."
+                    className="flex-1 px-3 py-2 text-sm rounded-xl bg-muted border-0 outline-none focus:ring-2 focus:ring-primary/30" />
+                  <button onClick={sendBotMessage} disabled={!botInput.trim() || botSending}
+                    className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all
+                      ${botInput.trim() && !botSending ? "bg-primary hover:bg-primary/90 text-white" : "bg-muted text-muted-foreground"}`}>
+                    {botSending
+                      ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      : <Icon name="Send" size={16} />}
+                  </button>
+                </div>
               </div>
             </div>
           </>

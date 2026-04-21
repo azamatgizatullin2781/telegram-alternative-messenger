@@ -1,6 +1,13 @@
 {
   "tests": [
     {
+      "name": "Get history without token",
+      "method": "GET",
+      "path": "/?action=history",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
       "name": "OPTIONS preflight",
       "method": "OPTIONS",
       "path": "/",
@@ -19,6 +26,14 @@
       "method": "POST",
       "path": "/",
       "body": {"action": "initiate", "callee_id": 1, "call_type": "audio"},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Clear history without token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "clear_history"},
       "expectedStatus": 401,
       "bodyMatcher": "partial"
     }
